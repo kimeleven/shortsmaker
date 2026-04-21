@@ -20,22 +20,26 @@ function drawPlayerOverlay(
   title: string,
   artist: string,
   currentTime: number,
-  totalDuration: number
+  totalDuration: number,
+  playing = false
 ) {
   const W = SHORTS_W;
   const H = SHORTS_H;
 
-  // Bottom gradient overlay
-  const gradH = 500;
-  const grad = ctx.createLinearGradient(0, H - gradH, 0, H);
+  // 하단 20% 공백 — 컨텐츠는 H*0.8 이하로 내려가지 않음
+  const contentBottom = H * 0.8; // 1536px
+
+  // Gradient: content 영역 하단부만 덮음
+  const gradH = 600;
+  const grad = ctx.createLinearGradient(0, contentBottom - gradH, 0, contentBottom);
   grad.addColorStop(0, "rgba(0,0,0,0)");
   grad.addColorStop(0.4, "rgba(0,0,0,0.4)");
   grad.addColorStop(1, "rgba(0,0,0,0.85)");
   ctx.fillStyle = grad;
-  ctx.fillRect(0, H - gradH, W, gradH);
+  ctx.fillRect(0, contentBottom - gradH, W, gradH);
 
-  // Progress bar background
-  const barY = H - 80;
+  // Progress bar — contentBottom 기준 위 60px
+  const barY = contentBottom - 60;
   const barH = 6;
   const barMargin = 60;
   const barW = W - barMargin * 2;
@@ -60,19 +64,11 @@ function drawPlayerOverlay(
   ctx.fillStyle = "#ffffff";
   ctx.fill();
 
-  // Time labels
-  ctx.font = "bold 28px Arial, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillStyle = "rgba(255,255,255,0.6)";
-  ctx.fillText(formatTime(currentTime), barMargin, barY - 16);
-  ctx.textAlign = "right";
-  ctx.fillText(formatTime(totalDuration), W - barMargin, barY - 16);
-
   // Title
   ctx.textAlign = "center";
   ctx.font = "bold 52px Arial, sans-serif";
   ctx.fillStyle = "#ffffff";
-  const titleY = barY - 160;
+  const titleY = barY - 130;
   ctx.fillText(title || "제목 없음", W / 2, titleY, W - 120);
 
   // Artist
@@ -80,25 +76,64 @@ function drawPlayerOverlay(
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   ctx.fillText(artist || "아티스트", W / 2, titleY + 56, W - 120);
 
-  // Play/Pause button (circle + triangle)
-  const btnY = titleY - 120;
-  const btnR = 50;
-  // Circle
-  ctx.beginPath();
-  ctx.arc(W / 2, btnY, btnR, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255,255,255,0.15)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  // Play triangle
-  ctx.beginPath();
-  ctx.moveTo(W / 2 - 16, btnY - 24);
-  ctx.lineTo(W / 2 - 16, btnY + 24);
-  ctx.lineTo(W / 2 + 22, btnY);
-  ctx.closePath();
+  // 3-button player controls: ⏮  ⏸/▶  ⏭
+  const btnY = titleY - 130;
+  const mainR = 56;   // 중앙 버튼 반지름
+  const subR  = 38;   // 사이드 버튼 반지름
+  const gap   = 200;  // 중앙 ↔ 사이드 간격
+
+  const drawCircleBtn = (cx: number, cy: number, r: number) => {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+  };
+
+  // ── 전곡 (⏮) ──
+  const prevX = W / 2 - gap;
+  drawCircleBtn(prevX, btnY, subR);
+  // |◀◀ 모양
   ctx.fillStyle = "#ffffff";
+  ctx.fillRect(prevX - 18, btnY - 16, 5, 32); // 왼쪽 수직바
+  ctx.beginPath();
+  ctx.moveTo(prevX - 10, btnY);
+  ctx.lineTo(prevX + 14, btnY - 18);
+  ctx.lineTo(prevX + 14, btnY + 18);
+  ctx.closePath();
   ctx.fill();
+
+  // ── 중앙 (▶ or ⏸) ──
+  drawCircleBtn(W / 2, btnY, mainR);
+  ctx.fillStyle = "#ffffff";
+  if (playing) {
+    // 포즈: 두 수직 막대
+    ctx.fillRect(W / 2 - 18, btnY - 22, 12, 44);
+    ctx.fillRect(W / 2 + 6,  btnY - 22, 12, 44);
+  } else {
+    // 플레이: 삼각형
+    ctx.beginPath();
+    ctx.moveTo(W / 2 - 16, btnY - 26);
+    ctx.lineTo(W / 2 - 16, btnY + 26);
+    ctx.lineTo(W / 2 + 26, btnY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ── 다음 (⏭) ──
+  const nextX = W / 2 + gap;
+  drawCircleBtn(nextX, btnY, subR);
+  // ▶▶| 모양
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.moveTo(nextX - 14, btnY - 18);
+  ctx.lineTo(nextX - 14, btnY + 18);
+  ctx.lineTo(nextX + 10, btnY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(nextX + 13, btnY - 16, 5, 32); // 오른쪽 수직바
 }
 
 export default function ShortsGen() {
@@ -182,7 +217,7 @@ export default function ShortsGen() {
 
     const finish = () => {
       const ct = audioRef.current ? audioRef.current.currentTime : currentTime;
-      drawPlayerOverlay(ctx, title, artist, ct, duration);
+      drawPlayerOverlay(ctx, title, artist, ct, duration, isPlaying);
     };
 
     if (imageURL) {
@@ -198,7 +233,7 @@ export default function ShortsGen() {
     } else {
       finish();
     }
-  }, [imageURL, title, artist, currentTime, duration]);
+  }, [imageURL, title, artist, currentTime, duration, isPlaying]);
 
   // Redraw on state change
   useEffect(() => { drawPreview(); }, [drawPreview]);
