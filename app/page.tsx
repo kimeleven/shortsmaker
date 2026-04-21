@@ -266,7 +266,8 @@ export default function ShortsGen() {
         await ffmpeg.exec([
           "-loop", "1", "-i", "bg.png",
           "-i", "audio.mp3",
-          "-c:v", "libx264", "-tune", "stillimage",
+          "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
+          "-r", "10",
           "-c:a", "aac", "-b:a", "192k",
           "-pix_fmt", "yuv420p",
           "-t", String(vd), "-shortest",
