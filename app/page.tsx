@@ -29,14 +29,14 @@ function drawPlayerOverlay(
   // 하단 20% 공백 — 컨텐츠는 H*0.8 이하로 내려가지 않음
   const contentBottom = H * 0.8; // 1536px
 
-  // Gradient: content 영역 하단부만 덮음
+  // 그라디언트: 하단 끝까지 (하단 20% 포함)
   const gradH = 600;
-  const grad = ctx.createLinearGradient(0, contentBottom - gradH, 0, contentBottom);
+  const grad = ctx.createLinearGradient(0, contentBottom - gradH, 0, H);
   grad.addColorStop(0, "rgba(0,0,0,0)");
   grad.addColorStop(0.4, "rgba(0,0,0,0.4)");
   grad.addColorStop(1, "rgba(0,0,0,0.85)");
   ctx.fillStyle = grad;
-  ctx.fillRect(0, contentBottom - gradH, W, gradH);
+  ctx.fillRect(0, contentBottom - gradH, W, H - (contentBottom - gradH));
 
   // Progress bar — contentBottom 기준 위 60px
   const barY = contentBottom - 60;
