@@ -118,6 +118,7 @@ type Track = {
   title: string;
   artist: string;
   status: TrackStatus;
+  progress?: number; // 0~100, processing 중에만 사용
   error?: string;
 };
 
@@ -223,7 +224,7 @@ export default function ShortsGen() {
       const t = tracks[i];
       if (!t.mp3 || !t.image) continue;
 
-      setTrack(i, { status: "processing" });
+      setTrack(i, { status: "processing", progress: 0 });
       setPreviewIdx(i);
       setGenStatus(`처리 중 ${done + 1}/${valid.length}: ${t.title || t.mp3.name}`);
 
@@ -237,6 +238,14 @@ export default function ShortsGen() {
         await ffmpeg.writeFile("audio.mp3", await fetchFile(t.mp3));
 
         const vd = duration > 0 ? duration : 30;
+
+        // ffmpeg 진행률 콜백 (인코딩 % → 행 상태 실시간 업데이트)
+        const trackIdx = i;
+        const onProgress = ({ progress }: { progress: number }) => {
+          const pct = Math.min(99, Math.round(progress * 100));
+          setTrack(trackIdx, { progress: pct });
+        };
+        ffmpeg.on("progress", onProgress);
 
         // 프로그레스바 좌표 (drawOverlay와 동일한 계산)
         const barY = Math.round(SHORTS_H * 0.8) - 60; // 1476
@@ -264,6 +273,8 @@ export default function ShortsGen() {
           "-vf", `scale=${SHORTS_W}:${SHORTS_H},${f1},${f2},${f3}`,
           "output.mp4",
         ]);
+
+        ffmpeg.off("progress", onProgress);
 
         const rawData = await ffmpeg.readFile("output.mp4");
         const buf = (rawData as Uint8Array).buffer.slice(0) as ArrayBuffer;
@@ -430,9 +441,21 @@ export default function ShortsGen() {
                 />
 
                 {/* Status */}
-                <div className={`text-xs text-center ${t.status === "done" ? "text-green-400" : t.status === "error" ? "text-red-400" : t.status === "processing" ? "text-yellow-400" : "text-zinc-500"}`}>
-                  {STATUS_ICON[t.status]} {t.status === "idle" && t.mp3 && t.image ? "준비" : t.status === "idle" ? "대기" : t.status}
-                </div>
+                {t.status === "processing" ? (
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <div className="text-xs text-yellow-400 text-center font-mono">{t.progress ?? 0}%</div>
+                    <div className="w-full bg-zinc-700 rounded-full h-1.5">
+                      <div
+                        className="bg-yellow-400 h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: `${t.progress ?? 0}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className={`text-xs text-center ${t.status === "done" ? "text-green-400" : t.status === "error" ? "text-red-400" : "text-zinc-500"}`}>
+                    {STATUS_ICON[t.status]} {t.status === "idle" && t.mp3 && t.image ? "준비" : t.status === "idle" ? "대기" : t.status}
+                  </div>
+                )}
 
                 {/* Remove */}
                 <button
