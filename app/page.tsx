@@ -17,11 +17,13 @@ function formatTime(sec: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// includeBar: true = 미리보기용(캔버스에 바 직접 그림), false = 영상생성용(ffmpeg가 바를 그림)
 function drawOverlay(
   ctx: CanvasRenderingContext2D,
   title: string,
   artist: string,
-  progress = 0
+  progress = 0,
+  includeBar = true
 ) {
   const W = SHORTS_W, H = SHORTS_H;
   const contentBottom = H * 0.8;
@@ -35,17 +37,21 @@ function drawOverlay(
   ctx.fillStyle = grad;
   ctx.fillRect(0, contentBottom - gradH, W, H - (contentBottom - gradH));
 
-  // Progress bar
-  const barY = contentBottom - 60, barH = 6, barMargin = 60, barW = W - barMargin * 2;
-  ctx.fillStyle = "rgba(255,255,255,0.2)";
-  ctx.beginPath(); ctx.roundRect(barMargin, barY, barW, barH, 3); ctx.fill();
-  if (progress > 0) {
-    ctx.fillStyle = "#fff";
-    ctx.beginPath(); ctx.roundRect(barMargin, barY, barW * progress, barH, 3); ctx.fill();
+  const barY = Math.round(contentBottom) - 60;
+  const barH = 6, barMargin = 60, barW = W - barMargin * 2;
+
+  // Progress bar (미리보기에서만)
+  if (includeBar) {
+    ctx.fillStyle = "rgba(255,255,255,0.2)";
+    ctx.beginPath(); ctx.roundRect(barMargin, barY, barW, barH, 3); ctx.fill();
+    if (progress > 0) {
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.roundRect(barMargin, barY, barW * progress, barH, 3); ctx.fill();
+    }
+    const dotX = barMargin + barW * progress;
+    ctx.beginPath(); ctx.arc(dotX, barY + barH / 2, 10, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff"; ctx.fill();
   }
-  const dotX = barMargin + barW * progress;
-  ctx.beginPath(); ctx.arc(dotX, barY + barH / 2, 10, 0, Math.PI * 2);
-  ctx.fillStyle = "#fff"; ctx.fill();
 
   // Title / Artist
   ctx.textAlign = "center";
@@ -57,7 +63,7 @@ function drawOverlay(
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   ctx.fillText(artist || "아티스트", W / 2, titleY + 56, W - 120);
 
-  // 3 Buttons
+  // 3 Buttons: ⏮ / ⏸(pause) / ⏭
   const btnY = titleY - 130;
   const gap = 200;
   const drawBtn = (cx: number, r: number) => {
@@ -69,9 +75,10 @@ function drawOverlay(
   const px = W / 2 - gap; drawBtn(px, 38); ctx.fillStyle = "#fff";
   ctx.fillRect(px - 18, btnY - 16, 5, 32);
   ctx.beginPath(); ctx.moveTo(px - 10, btnY); ctx.lineTo(px + 14, btnY - 18); ctx.lineTo(px + 14, btnY + 18); ctx.closePath(); ctx.fill();
-  // ▶ (center)
+  // ⏸ (center — pause, 항상 재생중 상태)
   drawBtn(W / 2, 56); ctx.fillStyle = "#fff";
-  ctx.beginPath(); ctx.moveTo(W / 2 - 16, btnY - 26); ctx.lineTo(W / 2 - 16, btnY + 26); ctx.lineTo(W / 2 + 26, btnY); ctx.closePath(); ctx.fill();
+  ctx.fillRect(W / 2 - 20, btnY - 26, 13, 52);
+  ctx.fillRect(W / 2 + 7,  btnY - 26, 13, 52);
   // ⏭
   const nx = W / 2 + gap; drawBtn(nx, 38); ctx.fillStyle = "#fff";
   ctx.beginPath(); ctx.moveTo(nx - 14, btnY - 18); ctx.lineTo(nx - 14, btnY + 18); ctx.lineTo(nx + 10, btnY); ctx.closePath(); ctx.fill();
@@ -82,7 +89,8 @@ async function renderFrame(
   canvas: HTMLCanvasElement,
   imageURL: string | null,
   title: string,
-  artist: string
+  artist: string,
+  includeBar = true
 ) {
   const ctx = canvas.getContext("2d")!;
   canvas.width = SHORTS_W; canvas.height = SHORTS_H;
@@ -99,7 +107,7 @@ async function renderFrame(
       img.src = imageURL;
     });
   }
-  drawOverlay(ctx, title, artist, 0);
+  drawOverlay(ctx, title, artist, 0, includeBar);
 }
 
 type TrackStatus = "idle" | "processing" | "done" | "error";
@@ -220,16 +228,31 @@ export default function ShortsGen() {
       setGenStatus(`처리 중 ${done + 1}/${valid.length}: ${t.title || t.mp3.name}`);
 
       try {
-        // Render canvas
-        await renderFrame(canvasRef.current!, t.imageURL, t.title, t.artist);
-        const pngBlob: Blob = await new Promise((res) => canvasRef.current!.toBlob((b) => res(b!), "image/png"));
+        // 오프스크린 캔버스에 배경+오버레이 렌더 (프로그레스바 제외 — ffmpeg가 담당)
+        const offCanvas = document.createElement("canvas");
+        await renderFrame(offCanvas, t.imageURL, t.title, t.artist, false);
+        const pngBlob: Blob = await new Promise((res) => offCanvas.toBlob((b) => res(b!), "image/png"));
 
         await ffmpeg.writeFile("bg.png", await fetchFile(pngBlob));
         await ffmpeg.writeFile("audio.mp3", await fetchFile(t.mp3));
 
         const vd = duration > 0 ? duration : 30;
-        const barX = 60, barY = Math.round(SHORTS_H * 0.8) - 60, barW = 960, barH = 6;
-        const filterExpr = `drawbox=x=${barX}:y=${barY}:w='${barW}*t/${vd}':h=${barH}:color=white:t=fill`;
+
+        // 프로그레스바 좌표 (drawOverlay와 동일한 계산)
+        const barY = Math.round(SHORTS_H * 0.8) - 60; // 1476
+        const barH = 6;
+        const barMargin = 60;
+        const barW = SHORTS_W - barMargin * 2; // 960
+        const dotR = 10;
+        const dotCY = barY + Math.floor(barH / 2); // 1479
+
+        // 3개의 drawbox 필터:
+        // 1. 회색 트랙 (정적)
+        const f1 = `drawbox=x=${barMargin}:y=${barY}:w=${barW}:h=${barH}:color=white@0.2:t=fill`;
+        // 2. 흰색 진행 채움 (t에 따라 너비 증가)
+        const f2 = `drawbox=x=${barMargin}:y=${barY}:w=${barW}*t/${vd}:h=${barH}:color=white:t=fill`;
+        // 3. 흰색 점 (t에 따라 x 이동)
+        const f3 = `drawbox=x=${barMargin}+${barW}*t/${vd}-${dotR}:y=${dotCY - dotR}:w=${dotR * 2}:h=${dotR * 2}:color=white:t=fill`;
 
         await ffmpeg.exec([
           "-loop", "1", "-i", "bg.png",
@@ -238,7 +261,7 @@ export default function ShortsGen() {
           "-c:a", "aac", "-b:a", "192k",
           "-pix_fmt", "yuv420p",
           "-t", String(vd), "-shortest",
-          "-vf", `scale=${SHORTS_W}:${SHORTS_H},${filterExpr}`,
+          "-vf", `scale=${SHORTS_W}:${SHORTS_H},${f1},${f2},${f3}`,
           "output.mp4",
         ]);
 
