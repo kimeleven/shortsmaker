@@ -113,9 +113,13 @@ export default function ShortsGen() {
 
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
-  const [duration, setDuration] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0); // MP3 실제 길이
+  const [customDuration, setCustomDuration] = useState<number | "">(40); // 사용자 지정 (기본 40초)
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // 실제 사용할 영상 길이: 사용자 지정 > MP3 길이
+  const duration = typeof customDuration === "number" && customDuration > 0 ? customDuration : audioDuration;
 
   const [status, setStatus] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -150,7 +154,7 @@ export default function ShortsGen() {
     audioRef.current = audio;
 
     audio.addEventListener("loadedmetadata", () => {
-      setDuration(audio.duration);
+      setAudioDuration(audio.duration);
     });
     audio.addEventListener("ended", () => {
       setIsPlaying(false);
@@ -424,6 +428,36 @@ export default function ShortsGen() {
                   placeholder="아티스트명"
                   className="w-full bg-zinc-800 text-white text-sm rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500"
                 />
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
+              <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-widest">영상 길이</h2>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={180}
+                  value={customDuration}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCustomDuration(v === "" ? "" : Math.min(180, Math.max(1, Number(v))));
+                  }}
+                  className="w-24 bg-zinc-800 text-white text-xl font-bold rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500 text-center"
+                  placeholder="40"
+                />
+                <div className="text-sm text-zinc-400">
+                  초
+                  {audioDuration > 0 && (
+                    <button
+                      onClick={() => setCustomDuration(Math.ceil(audioDuration))}
+                      className="ml-3 text-xs text-zinc-500 hover:text-white underline"
+                    >
+                      MP3 길이 사용 ({formatTime(audioDuration)})
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
