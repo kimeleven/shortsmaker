@@ -1,75 +1,88 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent";
+// 문장 단위로 텍스트 분할 (4500자 이하 청크)
+function chunkText(text: string, maxLen = 4500): string[] {
+  if (text.length <= maxLen) return [text];
+  const sentences = text.split(/(?<=[.!?\n])\s*/);
+  const chunks: string[] = [];
+  let current = "";
+  for (const s of sentences) {
+    if ((current + s).length <= maxLen) {
+      current = current ? current + " " + s : s;
+    } else {
+      if (current) chunks.push(current.trim());
+      // 단일 문장이 maxLen 초과하면 강제 분할
+      let rem = s;
+      while (rem.length > maxLen) {
+        chunks.push(rem.slice(0, maxLen));
+        rem = rem.slice(maxLen);
+      }
+      current = rem;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
 
-const LANG_NAMES: Record<string, string> = {
-  ko: "Korean", ja: "Japanese", "zh-CN": "Simplified Chinese",
-  yue: "Cantonese", vi: "Vietnamese", ms: "Malay", id: "Indonesian",
-  th: "Thai", tl: "Filipino", hi: "Hindi", bn: "Bengali",
-  fa: "Persian", ar: "Arabic",
-  en: "English", fr: "French", de: "German", it: "Italian",
-  es: "Spanish", pt: "Portuguese", ru: "Russian", nl: "Dutch",
-  pl: "Polish", sv: "Swedish", no: "Norwegian", da: "Danish",
-  fi: "Finnish", ro: "Romanian", cs: "Czech", el: "Greek",
-  hu: "Hungarian", uk: "Ukrainian", sk: "Slovak", hr: "Croatian",
-  ca: "Catalan", is: "Icelandic",
-  tr: "Turkish", he: "Hebrew", af: "Afrikaans",
-};
+// 비공식 Google Translate API (무료, 소스언어 자동감지)
+async function translateGoogle(text: string, target: string): Promise<string> {
+  const chunks = chunkText(text);
+  const parts: string[] = [];
+  for (const chunk of chunks) {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(target)}&dt=t&q=${encodeURIComponent(chunk)}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (!res.ok) throw new Error(`Google Translate ${res.status}`);
+    const data = await res.json();
+    // data[0]: [[translated, original, ...], ...]
+    const translated = (data[0] as string[][]).map((item) => item[0]).join("");
+    parts.push(translated.trim());
+  }
+  return parts.join(" ");
+}
+
+// MyMemory 폴백 (소스언어 en 고정)
+async function translateMyMemory(text: string, target: string): Promise<string> {
+  const chunks = chunkText(text, 480);
+  const parts: string[] = [];
+  for (const chunk of chunks) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=en|${target}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const t = (data?.responseData?.translatedText || "").replace("TRANSLATED.NET CACHING", "").trim();
+    parts.push(t);
+  }
+  return parts.join(" ");
+}
+
+async function translateText(text: string, target: string): Promise<string> {
+  if (!text.trim()) return "";
+  try {
+    return await translateGoogle(text, target);
+  } catch {
+    return await translateMyMemory(text, target);
+  }
+}
 
 export async function POST(req: NextRequest) {
   const { title, description, target_langs } = await req.json();
   if (!target_langs?.length)
     return NextResponse.json({ error: "target_langs를 지정해주세요." }, { status: 400 });
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey)
-    return NextResponse.json({ error: "GEMINI_API_KEY가 설정되지 않았습니다." }, { status: 500 });
+  const results = await Promise.all(
+    target_langs.map(async (lang: string) => {
+      try {
+        const [t, d] = await Promise.all([
+          translateText(title || "", lang),
+          translateText(description || "", lang),
+        ]);
+        return [lang, { title: t, description: d }];
+      } catch (e) {
+        return [lang, { title: "", description: `[번역 실패: ${e}]` }];
+      }
+    })
+  );
 
-  const langList = target_langs
-    .map((code: string) => `"${code}": ${LANG_NAMES[code] || code}`)
-    .join(", ");
-
-  const prompt = `You are a professional translator. Translate the YouTube video title and description below into the specified languages.
-Auto-detect the source language.
-
-Languages to translate into (code: language name):
-${langList}
-
-Title: ${title || ""}
-Description: ${description || ""}
-
-Return ONLY a valid JSON object. No markdown, no explanation. Format:
-{
-  "<lang_code>": { "title": "...", "description": "..." },
-  ...
-}`;
-
-  try {
-    const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini API error: ${err}`);
-    }
-
-    const data = await res.json();
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-    // JSON 추출 (마크다운 코드블록 제거)
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("Gemini가 JSON을 반환하지 않았습니다.");
-
-    const result = JSON.parse(match[0]);
-    return NextResponse.json(result);
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
-  }
+  return NextResponse.json(Object.fromEntries(results));
 }
