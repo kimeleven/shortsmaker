@@ -229,49 +229,68 @@ export default function ShortsGen() {
       setGenStatus(`처리 중 ${done + 1}/${valid.length}: ${t.title || t.mp3.name}`);
 
       try {
-        // 오프스크린 캔버스에 배경+오버레이 렌더 (프로그레스바 제외 — ffmpeg가 담당)
-        const offCanvas = document.createElement("canvas");
-        await renderFrame(offCanvas, t.imageURL, t.title, t.artist, false);
-        const pngBlob: Blob = await new Promise((res) => offCanvas.toBlob((b) => res(b!), "image/png"));
+        const vd = duration > 0 ? duration : 30;
+        const trackIdx = i;
+        const FPS = 5; // 5fps — 정적 이미지에 충분, 메모리 절약
+        const totalFrames = Math.ceil(vd * FPS);
 
-        await ffmpeg.writeFile("bg.png", await fetchFile(pngBlob));
+        // 1단계: 배경+오버레이(바 제외) 1회 렌더 → ImageData로 저장
+        const bgCanvas = document.createElement("canvas");
+        bgCanvas.width = SHORTS_W; bgCanvas.height = SHORTS_H;
+        await renderFrame(bgCanvas, t.imageURL, t.title, t.artist, false);
+        const bgImageData = bgCanvas.getContext("2d")!.getImageData(0, 0, SHORTS_W, SHORTS_H);
+
+        // 프로그레스바 좌표
+        const barY = Math.round(SHORTS_H * 0.8) - 60;
+        const barH = 6, barMargin = 60, barW = SHORTS_W - barMargin * 2, dotR = 10;
+
+        // 프레임 캔버스 (재사용)
+        const fCanvas = document.createElement("canvas");
+        fCanvas.width = SHORTS_W; fCanvas.height = SHORTS_H;
+        const fCtx = fCanvas.getContext("2d")!;
+
+        // 2단계: 프레임별 렌더 → ffmpeg 파일시스템에 JPEG로 저장
+        for (let f = 0; f < totalFrames; f++) {
+          const progress = f / Math.max(1, totalFrames - 1);
+
+          fCtx.putImageData(bgImageData, 0, 0);
+
+          // 회색 트랙
+          fCtx.fillStyle = "rgba(255,255,255,0.2)";
+          fCtx.beginPath(); fCtx.roundRect(barMargin, barY, barW, barH, 3); fCtx.fill();
+          // 흰색 채움
+          if (progress > 0) {
+            fCtx.fillStyle = "#fff";
+            fCtx.beginPath(); fCtx.roundRect(barMargin, barY, barW * progress, barH, 3); fCtx.fill();
+          }
+          // 흰색 점
+          fCtx.beginPath(); fCtx.arc(barMargin + barW * progress, barY + barH / 2, dotR, 0, Math.PI * 2);
+          fCtx.fillStyle = "#fff"; fCtx.fill();
+
+          const blob: Blob = await new Promise((res) => fCanvas.toBlob((b) => res(b!), "image/jpeg", 0.85));
+          await ffmpeg.writeFile(`f${String(f).padStart(5, "0")}.jpg`, await fetchFile(blob));
+
+          // 프레임 렌더 진행률 0~60%
+          setTrack(trackIdx, { progress: Math.round((f / totalFrames) * 60) });
+        }
+
+        // 3단계: 오디오 쓰기
         await ffmpeg.writeFile("audio.mp3", await fetchFile(t.mp3));
 
-        const vd = duration > 0 ? duration : 30;
-
-        // ffmpeg 진행률 콜백 (인코딩 % → 행 상태 실시간 업데이트)
-        const trackIdx = i;
+        // 4단계: ffmpeg 인코딩 (진행률 60~100%)
         const onProgress = ({ progress }: { progress: number }) => {
-          const pct = Math.min(99, Math.round(progress * 100));
-          setTrack(trackIdx, { progress: pct });
+          setTrack(trackIdx, { progress: 60 + Math.round(Math.min(progress, 1) * 39) });
         };
         ffmpeg.on("progress", onProgress);
 
-        // 프로그레스바 좌표 (drawOverlay와 동일한 계산)
-        const barY = Math.round(SHORTS_H * 0.8) - 60; // 1476
-        const barH = 6;
-        const barMargin = 60;
-        const barW = SHORTS_W - barMargin * 2; // 960
-        const dotR = 10;
-        const dotCY = barY + Math.floor(barH / 2); // 1479
-
-        // 3개의 drawbox 필터:
-        // 1. 회색 트랙 (정적)
-        const f1 = `drawbox=x=${barMargin}:y=${barY}:w=${barW}:h=${barH}:color=white@0.2:t=fill`;
-        // 2. 흰색 진행 채움 (t에 따라 너비 증가)
-        const f2 = `drawbox=x=${barMargin}:y=${barY}:w=${barW}*t/${vd}:h=${barH}:color=white:t=fill`;
-        // 3. 흰색 점 (t에 따라 x 이동)
-        const f3 = `drawbox=x=${barMargin}+${barW}*t/${vd}-${dotR}:y=${dotCY - dotR}:w=${dotR * 2}:h=${dotR * 2}:color=white:t=fill`;
-
         await ffmpeg.exec([
-          "-loop", "1", "-i", "bg.png",
+          "-framerate", String(FPS),
+          "-i", "f%05d.jpg",
           "-i", "audio.mp3",
-          "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
-          "-r", "10",
+          "-c:v", "libx264", "-preset", "ultrafast",
           "-c:a", "aac", "-b:a", "192k",
           "-pix_fmt", "yuv420p",
           "-t", String(vd), "-shortest",
-          "-vf", `scale=${SHORTS_W}:${SHORTS_H},${f1},${f2},${f3}`,
           "output.mp4",
         ]);
 
@@ -282,7 +301,10 @@ export default function ShortsGen() {
         const fname = `${String(i + 1).padStart(2, "0")}_${(t.title || t.mp3.name.replace(/\.mp3$/i, "")).replace(/[^\w가-힣]/g, "_")}.mp4`;
         zip.file(fname, buf);
 
-        await ffmpeg.deleteFile("bg.png");
+        // 임시 파일 정리
+        for (let f = 0; f < totalFrames; f++) {
+          await ffmpeg.deleteFile(`f${String(f).padStart(5, "0")}.jpg`);
+        }
         await ffmpeg.deleteFile("audio.mp3");
         await ffmpeg.deleteFile("output.mp4");
 
