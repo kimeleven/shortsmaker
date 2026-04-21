@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const LANG_GROUPS = [
   {
@@ -62,6 +62,8 @@ const ALL_LANGS = LANG_GROUPS.flatMap((g) => g.langs);
 
 type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string };
 type TranslateResult = Record<string, { title: string; description: string }>;
+type AuthStatus = { authenticated: boolean; email?: string };
+type PushState = { lang: string; status: "loading" | "ok" | "error"; message?: string };
 
 export default function YTTransPage() {
   const [url, setUrl] = useState("");
@@ -71,6 +73,36 @@ export default function YTTransPage() {
   const [fetchLoading, setFetchLoading] = useState(false);
   const [transLoading, setTransLoading] = useState(false);
   const [error, setError] = useState("");
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [pushState, setPushState] = useState<PushState | null>(null);
+
+  const checkAuthStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/yttrans/oauth/status");
+      const data = await res.json();
+      setAuthStatus(data);
+    } catch {
+      setAuthStatus({ authenticated: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAuthStatus();
+  }, [checkAuthStatus]);
+
+  // auth=success or auth=error 쿼리 처리
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const auth = params.get("auth");
+    if (auth === "success") {
+      checkAuthStatus();
+      // URL 정리
+      window.history.replaceState({}, "", "/yttrans");
+    } else if (auth === "error") {
+      setError("Google 인증에 실패했습니다. 다시 시도해주세요.");
+      window.history.replaceState({}, "", "/yttrans");
+    }
+  }, [checkAuthStatus]);
 
   const fetchVideo = async () => {
     if (!url.trim()) return;
@@ -128,6 +160,48 @@ export default function YTTransPage() {
     if (!results?.[lang]) return;
     const { title, description } = results[lang];
     navigator.clipboard.writeText(`${title}\n\n${description}`);
+  };
+
+  const handleLogin = () => {
+    window.location.href = "/api/yttrans/oauth/authorize";
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/yttrans/oauth/logout", { method: "POST" });
+    setAuthStatus({ authenticated: false });
+  };
+
+  const pushToYouTube = async (lang: string) => {
+    if (!video || !results?.[lang]) return;
+    setPushState({ lang, status: "loading" });
+
+    try {
+      const res = await fetch("/api/yttrans/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          video_id: video.videoId,
+          title: results[lang].title,
+          description: results[lang].description,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          setAuthStatus({ authenticated: false });
+          setPushState({ lang, status: "error", message: "인증 만료. 다시 로그인하세요." });
+        } else {
+          setPushState({ lang, status: "error", message: data.error || "업데이트 실패" });
+        }
+        return;
+      }
+
+      setPushState({ lang, status: "ok" });
+      setTimeout(() => setPushState(null), 3000);
+    } catch {
+      setPushState({ lang, status: "error", message: "네트워크 오류" });
+    }
   };
 
   return (
@@ -223,21 +297,86 @@ export default function YTTransPage() {
         {results && (
           <div className="space-y-3">
             <div className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">번역 결과</div>
+
+            {/* YouTube 인증 배너 */}
+            {authStatus !== null && (
+              <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+                {!authStatus.authenticated ? (
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm text-zinc-300 font-medium">번역 결과를 YouTube에 직접 적용할 수 있습니다.</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">Google 계정으로 인증하면 제목·설명을 바로 업데이트합니다.</p>
+                    </div>
+                    <button
+                      onClick={handleLogin}
+                      className="shrink-0 px-4 py-2 rounded-lg bg-white text-black text-sm font-bold hover:bg-zinc-200 transition-all whitespace-nowrap"
+                    >
+                      Google 계정으로 인증
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-green-400 text-sm">✓</span>
+                      <span className="text-sm text-zinc-300">
+                        {authStatus.email ? (
+                          <span>인증됨 <span className="text-zinc-500 text-xs">({authStatus.email})</span></span>
+                        ) : (
+                          "인증됨"
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleLogout}
+                      className="text-xs text-zinc-500 hover:text-white px-3 py-1.5 rounded-lg hover:bg-zinc-700 transition-colors"
+                    >
+                      로그아웃
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {selectedLangs.map((lang) => {
               const r = results[lang];
               if (!r) return null;
               const langLabel = ALL_LANGS.find((l) => l.code === lang)?.label || lang;
+              const isPushing = pushState?.lang === lang && pushState.status === "loading";
+              const pushOk = pushState?.lang === lang && pushState.status === "ok";
+              const pushErr = pushState?.lang === lang && pushState.status === "error";
+
               return (
                 <div key={lang} className="bg-zinc-900 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-zinc-300">{langLabel}</span>
-                    <button
-                      onClick={() => copyAll(lang)}
-                      className="text-xs text-zinc-500 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700"
-                    >
-                      복사
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {authStatus?.authenticated && (
+                        <button
+                          onClick={() => pushToYouTube(lang)}
+                          disabled={isPushing}
+                          className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                        >
+                          {isPushing ? "적용 중..." : "YouTube에 적용"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => copyAll(lang)}
+                        className="text-xs text-zinc-500 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700"
+                      >
+                        복사
+                      </button>
+                    </div>
                   </div>
+                  {pushOk && (
+                    <div className="text-xs text-green-400 bg-green-900/20 px-3 py-1.5 rounded-lg">
+                      ✓ YouTube 업데이트 완료
+                    </div>
+                  )}
+                  {pushErr && (
+                    <div className="text-xs text-red-400 bg-red-900/20 px-3 py-1.5 rounded-lg">
+                      {pushState.message || "업데이트 실패"}
+                    </div>
+                  )}
                   <div className="text-sm font-medium text-white">{r.title}</div>
                   <div className="text-xs text-zinc-400 whitespace-pre-line max-h-32 overflow-y-auto">{r.description}</div>
                 </div>
