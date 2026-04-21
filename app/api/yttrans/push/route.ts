@@ -37,7 +37,8 @@ type Translations = Record<string, { title: string; description: string }>;
 async function pushLocalizations(
   accessToken: string,
   videoId: string,
-  translations: Translations
+  translations: Translations,
+  defaultLanguage: string | null
 ): Promise<{ ok: boolean; status?: number }> {
   // 1. 기존 snippet + localizations 가져오기
   const listRes = await fetch(
@@ -52,18 +53,23 @@ async function pushLocalizations(
   const item = listData.items?.[0];
   if (!item) return { ok: false, status: 404 };
 
+  const snippet = item.snippet;
   const existingLocalizations = item.localizations || {};
 
-  // 2. 번역 결과를 localizations에 병합
+  // 2. defaultLanguage 결정: 기존값 > 파라미터 > 'ko' 폴백
+  const resolvedDefaultLang =
+    snippet.defaultLanguage || defaultLanguage || "ko";
+
+  // 3. 번역 결과를 localizations에 병합
   const newLocalizations = { ...existingLocalizations };
   for (const [lang, { title, description }] of Object.entries(translations)) {
     const ytLang = toYTLang(lang);
     newLocalizations[ytLang] = { title, description };
   }
 
-  // 3. localizations 업데이트
+  // 4. snippet(defaultLanguage) + localizations 동시 업데이트
   const updateRes = await fetch(
-    "https://www.googleapis.com/youtube/v3/videos?part=localizations",
+    "https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations",
     {
       method: "PUT",
       headers: {
@@ -72,6 +78,7 @@ async function pushLocalizations(
       },
       body: JSON.stringify({
         id: videoId,
+        snippet: { ...snippet, defaultLanguage: resolvedDefaultLang },
         localizations: newLocalizations,
       }),
     }
@@ -95,19 +102,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "인증 필요" }, { status: 401 });
   }
 
-  let body: { video_id?: string; translations?: Translations };
+  let body: { video_id?: string; translations?: Translations; default_language?: string | null };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "잘못된 요청" }, { status: 400 });
   }
 
-  const { video_id, translations } = body;
+  const { video_id, translations, default_language = null } = body;
   if (!video_id || !translations || !Object.keys(translations).length) {
     return NextResponse.json({ error: "video_id, translations 필수" }, { status: 400 });
   }
 
-  let result = await pushLocalizations(accessToken, video_id, translations);
+  let result = await pushLocalizations(accessToken, video_id, translations, default_language);
 
   // 401이면 토큰 갱신 후 재시도
   if (result.status === 401 && refreshToken) {
@@ -116,7 +123,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
     }
     accessToken = newToken;
-    result = await pushLocalizations(accessToken, video_id, translations);
+    result = await pushLocalizations(accessToken, video_id, translations, default_language);
 
     if (result.ok) {
       const response = NextResponse.json({ ok: true });

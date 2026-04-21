@@ -17,11 +17,12 @@ export async function POST(req: NextRequest) {
   const item = data.items?.[0];
   if (!item) return NextResponse.json({ error: "영상을 찾을 수 없습니다." }, { status: 404 });
 
-  const { title, description, thumbnails } = item.snippet;
+  const { title, description, thumbnails, defaultLanguage, defaultAudioLanguage } = item.snippet;
   return NextResponse.json({
     videoId,
     title,
     description,
     thumbnail: thumbnails?.medium?.url || thumbnails?.default?.url,
+    defaultLanguage: defaultLanguage || defaultAudioLanguage || null,
   });
 }

@@ -60,7 +60,7 @@ const LANG_GROUPS = [
 
 const ALL_LANGS = LANG_GROUPS.flatMap((g) => g.langs);
 
-type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string };
+type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string; defaultLanguage?: string | null };
 type TranslateResult = Record<string, { title: string; description: string }>;
 type AuthStatus = { authenticated: boolean; email?: string };
 
@@ -181,6 +181,7 @@ export default function YTTransPage() {
         body: JSON.stringify({
           video_id: video.videoId,
           translations: results,
+          default_language: video.defaultLanguage ?? null,
         }),
       });
       const data = await res.json();
