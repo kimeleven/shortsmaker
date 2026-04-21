@@ -3,33 +3,30 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import JSZip from "jszip";
 
 const SHORTS_W = 1080;
 const SHORTS_H = 1920;
-const PREVIEW_H = 560;
+const PREVIEW_H = 420;
 const PREVIEW_W = Math.round(SHORTS_W * (PREVIEW_H / SHORTS_H));
+const MAX_TRACKS = 20;
 
-function formatTime(sec: number): string {
+function formatTime(sec: number) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function drawPlayerOverlay(
+function drawOverlay(
   ctx: CanvasRenderingContext2D,
   title: string,
   artist: string,
-  currentTime: number,
-  totalDuration: number,
-  playing = false
+  progress = 0
 ) {
-  const W = SHORTS_W;
-  const H = SHORTS_H;
+  const W = SHORTS_W, H = SHORTS_H;
+  const contentBottom = H * 0.8;
 
-  // 하단 20% 공백 — 컨텐츠는 H*0.8 이하로 내려가지 않음
-  const contentBottom = H * 0.8; // 1536px
-
-  // 그라디언트: 하단 끝까지 (하단 20% 포함)
+  // Gradient
   const gradH = 600;
   const grad = ctx.createLinearGradient(0, contentBottom - gradH, 0, H);
   grad.addColorStop(0, "rgba(0,0,0,0)");
@@ -38,137 +35,108 @@ function drawPlayerOverlay(
   ctx.fillStyle = grad;
   ctx.fillRect(0, contentBottom - gradH, W, H - (contentBottom - gradH));
 
-  // Progress bar — contentBottom 기준 위 60px
-  const barY = contentBottom - 60;
-  const barH = 6;
-  const barMargin = 60;
-  const barW = W - barMargin * 2;
+  // Progress bar
+  const barY = contentBottom - 60, barH = 6, barMargin = 60, barW = W - barMargin * 2;
   ctx.fillStyle = "rgba(255,255,255,0.2)";
-  ctx.beginPath();
-  ctx.roundRect(barMargin, barY, barW, barH, 3);
-  ctx.fill();
-
-  // Progress bar fill
-  const progress = totalDuration > 0 ? Math.min(currentTime / totalDuration, 1) : 0;
+  ctx.beginPath(); ctx.roundRect(barMargin, barY, barW, barH, 3); ctx.fill();
   if (progress > 0) {
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.roundRect(barMargin, barY, barW * progress, barH, 3);
-    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.roundRect(barMargin, barY, barW * progress, barH, 3); ctx.fill();
   }
-
-  // Progress dot
   const dotX = barMargin + barW * progress;
-  ctx.beginPath();
-  ctx.arc(dotX, barY + barH / 2, 10, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(dotX, barY + barH / 2, 10, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff"; ctx.fill();
 
-  // Title
+  // Title / Artist
   ctx.textAlign = "center";
-  ctx.font = "bold 52px Arial, sans-serif";
-  ctx.fillStyle = "#ffffff";
   const titleY = barY - 130;
+  ctx.font = "bold 52px Arial, sans-serif";
+  ctx.fillStyle = "#fff";
   ctx.fillText(title || "제목 없음", W / 2, titleY, W - 120);
-
-  // Artist
   ctx.font = "36px Arial, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   ctx.fillText(artist || "아티스트", W / 2, titleY + 56, W - 120);
 
-  // 3-button player controls: ⏮  ⏸/▶  ⏭
+  // 3 Buttons
   const btnY = titleY - 130;
-  const mainR = 56;   // 중앙 버튼 반지름
-  const subR  = 38;   // 사이드 버튼 반지름
-  const gap   = 200;  // 중앙 ↔ 사이드 간격
-
-  const drawCircleBtn = (cx: number, cy: number, r: number) => {
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
+  const gap = 200;
+  const drawBtn = (cx: number, r: number) => {
+    ctx.beginPath(); ctx.arc(cx, btnY, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 2.5; ctx.stroke();
   };
-
-  // ── 전곡 (⏮) ──
-  const prevX = W / 2 - gap;
-  drawCircleBtn(prevX, btnY, subR);
-  // |◀◀ 모양
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(prevX - 18, btnY - 16, 5, 32); // 왼쪽 수직바
-  ctx.beginPath();
-  ctx.moveTo(prevX - 10, btnY);
-  ctx.lineTo(prevX + 14, btnY - 18);
-  ctx.lineTo(prevX + 14, btnY + 18);
-  ctx.closePath();
-  ctx.fill();
-
-  // ── 중앙 (▶ or ⏸) ──
-  drawCircleBtn(W / 2, btnY, mainR);
-  ctx.fillStyle = "#ffffff";
-  if (playing) {
-    // 포즈: 두 수직 막대
-    ctx.fillRect(W / 2 - 18, btnY - 22, 12, 44);
-    ctx.fillRect(W / 2 + 6,  btnY - 22, 12, 44);
-  } else {
-    // 플레이: 삼각형
-    ctx.beginPath();
-    ctx.moveTo(W / 2 - 16, btnY - 26);
-    ctx.lineTo(W / 2 - 16, btnY + 26);
-    ctx.lineTo(W / 2 + 26, btnY);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  // ── 다음 (⏭) ──
-  const nextX = W / 2 + gap;
-  drawCircleBtn(nextX, btnY, subR);
-  // ▶▶| 모양
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.moveTo(nextX - 14, btnY - 18);
-  ctx.lineTo(nextX - 14, btnY + 18);
-  ctx.lineTo(nextX + 10, btnY);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillRect(nextX + 13, btnY - 16, 5, 32); // 오른쪽 수직바
+  // ⏮
+  const px = W / 2 - gap; drawBtn(px, 38); ctx.fillStyle = "#fff";
+  ctx.fillRect(px - 18, btnY - 16, 5, 32);
+  ctx.beginPath(); ctx.moveTo(px - 10, btnY); ctx.lineTo(px + 14, btnY - 18); ctx.lineTo(px + 14, btnY + 18); ctx.closePath(); ctx.fill();
+  // ▶ (center)
+  drawBtn(W / 2, 56); ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.moveTo(W / 2 - 16, btnY - 26); ctx.lineTo(W / 2 - 16, btnY + 26); ctx.lineTo(W / 2 + 26, btnY); ctx.closePath(); ctx.fill();
+  // ⏭
+  const nx = W / 2 + gap; drawBtn(nx, 38); ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.moveTo(nx - 14, btnY - 18); ctx.lineTo(nx - 14, btnY + 18); ctx.lineTo(nx + 10, btnY); ctx.closePath(); ctx.fill();
+  ctx.fillRect(nx + 13, btnY - 16, 5, 32);
 }
+
+async function renderFrame(
+  canvas: HTMLCanvasElement,
+  imageURL: string | null,
+  title: string,
+  artist: string
+) {
+  const ctx = canvas.getContext("2d")!;
+  canvas.width = SHORTS_W; canvas.height = SHORTS_H;
+  ctx.fillStyle = "#111"; ctx.fillRect(0, 0, SHORTS_W, SHORTS_H);
+  if (imageURL) {
+    await new Promise<void>((res) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const scale = Math.max(SHORTS_W / img.width, SHORTS_H / img.height);
+        const sw = img.width * scale, sh = img.height * scale;
+        ctx.drawImage(img, (SHORTS_W - sw) / 2, (SHORTS_H - sh) / 2, sw, sh);
+        res();
+      };
+      img.src = imageURL;
+    });
+  }
+  drawOverlay(ctx, title, artist, 0);
+}
+
+type TrackStatus = "idle" | "processing" | "done" | "error";
+type Track = {
+  mp3: File | null;
+  image: File | null;
+  imageURL: string | null;
+  title: string;
+  artist: string;
+  status: TrackStatus;
+  error?: string;
+};
+
+const newTrack = (): Track => ({ mp3: null, image: null, imageURL: null, title: "", artist: "", status: "idle" });
+
+const STATUS_ICON: Record<TrackStatus, string> = {
+  idle: "○",
+  processing: "⏳",
+  done: "✅",
+  error: "❌",
+};
 
 export default function ShortsGen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const animFrameRef = useRef<number>(0);
-
-  const [mp3File, setMp3File] = useState<File | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imageURL, setImageURL] = useState<string | null>(null);
-  const [audioURL, setAudioURL] = useState<string | null>(null);
-
-  const [title, setTitle] = useState("");
-  const [artist, setArtist] = useState("");
-  const [audioDuration, setAudioDuration] = useState(0); // MP3 실제 길이
-  const [customDuration, setCustomDuration] = useState<number | "">(40); // 사용자 지정 (기본 40초)
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-
-  // 실제 사용할 영상 길이: 사용자 지정 > MP3 길이
-  const duration = typeof customDuration === "number" && customDuration > 0 ? customDuration : audioDuration;
-
-  const [status, setStatus] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
   const ffmpegRef = useRef<FFmpeg | null>(null);
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const [tracks, setTracks] = useState<Track[]>([newTrack()]);
+  const [duration, setDuration] = useState(40);
+  const [generating, setGenerating] = useState(false);
+  const [genStatus, setGenStatus] = useState("");
+  const [previewIdx, setPreviewIdx] = useState(0);
 
   // Load FFmpeg
   useEffect(() => {
     const load = async () => {
       const ffmpeg = new FFmpeg();
       ffmpegRef.current = ffmpeg;
-      ffmpeg.on("log", ({ message }) => {
-        if (message.includes("time=")) setStatus("인코딩 중... " + message.split("time=")[1]?.split(" ")[0]);
-      });
       try {
         await ffmpeg.load({
           coreURL: await toBlobURL("https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js", "text/javascript"),
@@ -176,346 +144,290 @@ export default function ShortsGen() {
         });
         setFfmpegLoaded(true);
       } catch {
-        setStatus("FFmpeg 로드 실패 — 새로고침 후 다시 시도해주세요.");
+        setGenStatus("FFmpeg 로드 실패");
       }
     };
     load();
   }, []);
 
-  // Audio element setup
-  useEffect(() => {
-    if (!audioURL) return;
-    const audio = new Audio(audioURL);
-    audioRef.current = audio;
+  // Preview
+  const drawPreview = useCallback(async () => {
+    const t = tracks[previewIdx];
+    if (!canvasRef.current) return;
+    await renderFrame(canvasRef.current, t?.imageURL ?? null, t?.title ?? "", t?.artist ?? "");
+  }, [tracks, previewIdx]);
 
-    audio.addEventListener("loadedmetadata", () => {
-      setAudioDuration(audio.duration);
-    });
-    audio.addEventListener("ended", () => {
-      setIsPlaying(false);
-      setCurrentTime(0);
-    });
-
-    return () => {
-      audio.pause();
-      audio.src = "";
-      audioRef.current = null;
-    };
-  }, [audioURL]);
-
-  // Animation loop for live preview
-  const drawPreview = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    canvas.width = SHORTS_W;
-    canvas.height = SHORTS_H;
-    ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, SHORTS_W, SHORTS_H);
-
-    const finish = () => {
-      const ct = audioRef.current ? audioRef.current.currentTime : currentTime;
-      drawPlayerOverlay(ctx, title, artist, ct, duration, isPlaying);
-    };
-
-    if (imageURL) {
-      const img = new window.Image();
-      img.onload = () => {
-        const scale = Math.max(SHORTS_W / img.width, SHORTS_H / img.height);
-        const sw = img.width * scale;
-        const sh = img.height * scale;
-        ctx.drawImage(img, (SHORTS_W - sw) / 2, (SHORTS_H - sh) / 2, sw, sh);
-        finish();
-      };
-      img.src = imageURL;
-    } else {
-      finish();
-    }
-  }, [imageURL, title, artist, currentTime, duration, isPlaying]);
-
-  // Redraw on state change
   useEffect(() => { drawPreview(); }, [drawPreview]);
 
-  // Animation frame loop while playing
-  useEffect(() => {
-    if (!isPlaying) return;
+  // Track helpers
+  const setTrack = (i: number, patch: Partial<Track>) =>
+    setTracks((prev) => prev.map((t, idx) => idx === i ? { ...t, ...patch } : t));
 
-    const tick = () => {
-      if (audioRef.current) {
-        setCurrentTime(audioRef.current.currentTime);
-      }
-      animFrameRef.current = requestAnimationFrame(tick);
-    };
-    animFrameRef.current = requestAnimationFrame(tick);
-
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, [isPlaying]);
-
-  // Play / Pause toggle
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      audioRef.current.play();
-      setIsPlaying(true);
-    }
+  const addRow = () => {
+    if (tracks.length < MAX_TRACKS) setTracks((p) => [...p, newTrack()]);
   };
 
-  // Handle MP3 selection
-  const handleMp3 = (f: File) => {
-    setMp3File(f);
-    if (audioURL) URL.revokeObjectURL(audioURL);
-    setAudioURL(URL.createObjectURL(f));
-    setCurrentTime(0);
-    setIsPlaying(false);
+  const removeRow = (i: number) => setTracks((p) => p.filter((_, idx) => idx !== i));
 
-    // Auto-fill title/artist from filename
-    const name = f.name.replace(/\.mp3$/i, "");
-    const parts = name.split(" - ");
-    if (parts.length >= 2) {
-      setArtist(parts[0].trim());
-      setTitle(parts.slice(1).join(" - ").trim());
-    } else {
-      setTitle(name);
-    }
+  // Bulk MP3 upload
+  const handleBulkMp3 = (files: FileList) => {
+    const arr = Array.from(files).slice(0, MAX_TRACKS);
+    setTracks((prev) => {
+      const next = [...prev];
+      arr.forEach((f, i) => {
+        if (i >= next.length) next.push(newTrack());
+        const name = f.name.replace(/\.mp3$/i, "");
+        const parts = name.split(" - ");
+        const title = parts.length >= 2 ? parts.slice(1).join(" - ").trim() : name;
+        const artist = parts.length >= 2 ? parts[0].trim() : "";
+        next[i] = { ...next[i], mp3: f, title: next[i].title || title, artist: next[i].artist || artist };
+      });
+      return next;
+    });
   };
 
-  // Generate video with animated progress bar
-  const generateVideo = async () => {
-    if (!mp3File) { setStatus("MP3 파일을 선택해주세요."); return; }
-    if (!imageFile) { setStatus("배경 이미지를 선택해주세요."); return; }
-    if (!ffmpegRef.current || !ffmpegLoaded) { setStatus("FFmpeg 로딩 중..."); return; }
+  // Bulk image upload
+  const handleBulkImage = (files: FileList) => {
+    const arr = Array.from(files).slice(0, MAX_TRACKS);
+    setTracks((prev) => {
+      const next = [...prev];
+      arr.forEach((f, i) => {
+        if (i >= next.length) next.push(newTrack());
+        const url = URL.createObjectURL(f);
+        next[i] = { ...next[i], image: f, imageURL: url };
+      });
+      return next;
+    });
+  };
+
+  // Generate all
+  const generateAll = async () => {
+    const valid = tracks.filter((t) => t.mp3 && t.image);
+    if (!valid.length) { setGenStatus("MP3 + 이미지가 있는 트랙이 없습니다."); return; }
+    if (!ffmpegRef.current || !ffmpegLoaded) { setGenStatus("FFmpeg 로딩 중..."); return; }
 
     setGenerating(true);
-    setStatus("캔버스 렌더링 중...");
+    const ffmpeg = ffmpegRef.current;
+    const zip = new JSZip();
+    let done = 0;
 
-    try {
-      const ffmpeg = ffmpegRef.current;
+    for (let i = 0; i < tracks.length; i++) {
+      const t = tracks[i];
+      if (!t.mp3 || !t.image) continue;
 
-      // Draw canvas without progress bar animation (static overlay)
-      const canvas = canvasRef.current!;
-      const ctx = canvas.getContext("2d")!;
-      canvas.width = SHORTS_W;
-      canvas.height = SHORTS_H;
-      ctx.fillStyle = "#111";
-      ctx.fillRect(0, 0, SHORTS_W, SHORTS_H);
+      setTrack(i, { status: "processing" });
+      setPreviewIdx(i);
+      setGenStatus(`처리 중 ${done + 1}/${valid.length}: ${t.title || t.mp3.name}`);
 
-      // Draw background image
-      if (imageURL) {
-        await new Promise<void>((resolve) => {
-          const img = new window.Image();
-          img.onload = () => {
-            const scale = Math.max(SHORTS_W / img.width, SHORTS_H / img.height);
-            const sw = img.width * scale;
-            const sh = img.height * scale;
-            ctx.drawImage(img, (SHORTS_W - sw) / 2, (SHORTS_H - sh) / 2, sw, sh);
-            resolve();
-          };
-          img.src = imageURL;
-        });
+      try {
+        // Render canvas
+        await renderFrame(canvasRef.current!, t.imageURL, t.title, t.artist);
+        const pngBlob: Blob = await new Promise((res) => canvasRef.current!.toBlob((b) => res(b!), "image/png"));
+
+        await ffmpeg.writeFile("bg.png", await fetchFile(pngBlob));
+        await ffmpeg.writeFile("audio.mp3", await fetchFile(t.mp3));
+
+        const vd = duration > 0 ? duration : 30;
+        const barX = 60, barY = Math.round(SHORTS_H * 0.8) - 60, barW = 960, barH = 6;
+        const filterExpr = `drawbox=x=${barX}:y=${barY}:w='${barW}*t/${vd}':h=${barH}:color=white:t=fill`;
+
+        await ffmpeg.exec([
+          "-loop", "1", "-i", "bg.png",
+          "-i", "audio.mp3",
+          "-c:v", "libx264", "-tune", "stillimage",
+          "-c:a", "aac", "-b:a", "192k",
+          "-pix_fmt", "yuv420p",
+          "-t", String(vd), "-shortest",
+          "-vf", `scale=${SHORTS_W}:${SHORTS_H},${filterExpr}`,
+          "output.mp4",
+        ]);
+
+        const rawData = await ffmpeg.readFile("output.mp4");
+        const buf = (rawData as Uint8Array).buffer.slice(0) as ArrayBuffer;
+        const fname = `${String(i + 1).padStart(2, "0")}_${(t.title || t.mp3.name.replace(/\.mp3$/i, "")).replace(/[^\w가-힣]/g, "_")}.mp4`;
+        zip.file(fname, buf);
+
+        await ffmpeg.deleteFile("bg.png");
+        await ffmpeg.deleteFile("audio.mp3");
+        await ffmpeg.deleteFile("output.mp4");
+
+        setTrack(i, { status: "done" });
+        done++;
+      } catch (e) {
+        setTrack(i, { status: "error", error: String(e) });
       }
-
-      // Draw player overlay with progress at 0
-      drawPlayerOverlay(ctx, title, artist, 0, duration);
-
-      const pngBlob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b!), "image/png"));
-
-      setStatus("파일 준비 중...");
-      await ffmpeg.writeFile("bg.png", await fetchFile(pngBlob));
-      await ffmpeg.writeFile("audio.mp3", await fetchFile(mp3File));
-
-      // Use the actual audio duration for video length
-      const videoDuration = duration > 0 ? duration : 30;
-
-      // Progress bar animation via FFmpeg drawbox filter
-      // Bar position matches our canvas: y=1840, x=60, width=960, height=6
-      const barX = 60;
-      const barY = 1840;
-      const barW = 960;
-      const barH = 6;
-      // Animated fill: width grows from 0 to barW over videoDuration
-      const filterExpr = `drawbox=x=${barX}:y=${barY}:w='${barW}*t/${videoDuration}':h=${barH}:color=white:t=fill`;
-
-      setStatus("영상 인코딩 중...");
-      await ffmpeg.exec([
-        "-loop", "1", "-i", "bg.png",
-        "-i", "audio.mp3",
-        "-c:v", "libx264", "-tune", "stillimage",
-        "-c:a", "aac", "-b:a", "192k",
-        "-pix_fmt", "yuv420p",
-        "-t", String(videoDuration),
-        "-shortest",
-        "-vf", `scale=${SHORTS_W}:${SHORTS_H},${filterExpr}`,
-        "output.mp4",
-      ]);
-
-      const rawData = await ffmpeg.readFile("output.mp4");
-      const buffer = (rawData as Uint8Array).buffer.slice(0) as ArrayBuffer;
-      const blob = new Blob([buffer], { type: "video/mp4" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "shorts.mp4";
-      a.click();
-      URL.revokeObjectURL(url);
-
-      await ffmpeg.deleteFile("bg.png");
-      await ffmpeg.deleteFile("audio.mp3");
-      await ffmpeg.deleteFile("output.mp4");
-      setStatus("✅ 다운로드 완료!");
-
-      // Restore preview
-      drawPreview();
-    } catch (e) {
-      setStatus("❌ 오류: " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setGenerating(false);
     }
+
+    // Download zip
+    setGenStatus("ZIP 압축 중...");
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `shorts_${done}개.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    setGenStatus(`✅ 완료 — ${done}개 영상 다운로드`);
+    setGenerating(false);
   };
+
+  const readyCount = tracks.filter((t) => t.mp3 && t.image).length;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white p-4">
-      <div className="max-w-5xl mx-auto">
-        <div className="text-center mb-6 pt-4">
-          <h1 className="text-3xl font-bold tracking-tight">ShortsGen</h1>
-          <p className="text-zinc-400 mt-1 text-sm">MP3 + 배경이미지 → 뮤직 쇼츠 영상</p>
+      <div className="max-w-6xl mx-auto">
+        <div className="mb-6 pt-2">
+          <h1 className="text-2xl font-bold">ShortsGen</h1>
+          <p className="text-zinc-400 text-sm mt-0.5">최대 {MAX_TRACKS}곡 일괄 생성</p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[315px_1fr] gap-6 items-start">
-          {/* Left: Preview */}
-          <div className="flex flex-col items-center gap-3 lg:sticky lg:top-4">
-            <div className="text-xs text-zinc-500 uppercase tracking-widest">미리보기</div>
-            <div
-              style={{ width: PREVIEW_W, height: PREVIEW_H }}
-              className="rounded-xl overflow-hidden border border-zinc-800 shadow-2xl cursor-pointer"
-              onClick={togglePlay}
-              title={isPlaying ? "일시정지" : "재생"}
-            >
-              <canvas ref={canvasRef} style={{ width: PREVIEW_W, height: PREVIEW_H }} className="block" />
+        {/* Top controls */}
+        <div className="flex flex-wrap items-end gap-4 mb-4">
+          {/* Bulk upload */}
+          <div className="bg-zinc-900 rounded-xl p-4 flex gap-4">
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">🎵 MP3 일괄 업로드</label>
+              <input
+                type="file" accept="audio/mp3,audio/mpeg" multiple
+                onChange={(e) => e.target.files && handleBulkMp3(e.target.files)}
+                className="text-xs text-zinc-300 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-zinc-700 file:text-white hover:file:bg-zinc-600 cursor-pointer"
+              />
             </div>
-            <div className="flex items-center gap-3 text-xs text-zinc-500">
-              <span>1080 × 1920</span>
-              {duration > 0 && <span>• {formatTime(duration)}</span>}
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1">🖼️ 이미지 일괄 업로드</label>
+              <input
+                type="file" accept="image/*" multiple
+                onChange={(e) => e.target.files && handleBulkImage(e.target.files)}
+                className="text-xs text-zinc-300 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-zinc-700 file:text-white hover:file:bg-zinc-600 cursor-pointer"
+              />
             </div>
-
-            {/* Audio playback control */}
-            {audioURL && (
-              <button
-                onClick={togglePlay}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition text-sm"
-              >
-                {isPlaying ? "⏸ 일시정지" : "▶ 미리듣기"}
-                {isPlaying && <span className="text-zinc-400">{formatTime(currentTime)}</span>}
-              </button>
-            )}
           </div>
 
-          {/* Right: Controls */}
-          <div className="flex flex-col gap-4">
-            {/* File upload */}
-            <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-widest">파일</h2>
-              <div>
-                <label className="text-xs text-zinc-400 mb-1 block">🎵 MP3</label>
-                <input
-                  type="file"
-                  accept="audio/mp3,audio/mpeg"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMp3(f); }}
-                  className="w-full text-xs text-zinc-300 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-zinc-700 file:text-white hover:file:bg-zinc-600 cursor-pointer"
-                />
-                {mp3File && <p className="text-xs text-green-400 mt-1">✓ {mp3File.name}</p>}
-              </div>
-              <div>
-                <label className="text-xs text-zinc-400 mb-1 block">🖼️ 배경 이미지</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setImageFile(f); setImageURL(URL.createObjectURL(f)); }}
-                  className="w-full text-xs text-zinc-300 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-zinc-700 file:text-white hover:file:bg-zinc-600 cursor-pointer"
-                />
-                {imageFile && <p className="text-xs text-green-400 mt-1">✓ {imageFile.name}</p>}
-              </div>
+          {/* Duration */}
+          <div className="bg-zinc-900 rounded-xl p-4 flex items-center gap-3">
+            <label className="text-xs text-zinc-400">공통 길이</label>
+            <input
+              type="number" min={1} max={180} value={duration}
+              onChange={(e) => setDuration(Math.min(180, Math.max(1, Number(e.target.value))))}
+              className="w-20 bg-zinc-800 text-white text-lg font-bold rounded-lg px-2 py-1.5 border border-zinc-700 focus:outline-none text-center"
+            />
+            <span className="text-zinc-400 text-sm">초</span>
+          </div>
+
+          {/* Generate */}
+          <button
+            onClick={generateAll}
+            disabled={generating || !ffmpegLoaded || readyCount === 0}
+            className="px-6 py-3 rounded-xl font-bold text-sm bg-white text-black hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+          >
+            {!ffmpegLoaded ? "로딩 중..." : generating ? "생성 중..." : `🎬 ${readyCount}개 생성`}
+          </button>
+        </div>
+
+        {genStatus && (
+          <div className={`text-sm px-4 py-2.5 rounded-lg mb-4 ${genStatus.startsWith("✅") ? "bg-green-900/40 text-green-400" : "bg-zinc-800 text-zinc-300"}`}>
+            {genStatus}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4 items-start">
+          {/* Preview */}
+          <div className="flex flex-col items-center gap-2 lg:sticky lg:top-4">
+            <div className="text-xs text-zinc-500 uppercase tracking-widest">미리보기 #{previewIdx + 1}</div>
+            <div style={{ width: PREVIEW_W, height: PREVIEW_H }} className="rounded-xl overflow-hidden border border-zinc-800">
+              <canvas ref={canvasRef} style={{ width: PREVIEW_W, height: PREVIEW_H }} className="block" />
+            </div>
+          </div>
+
+          {/* Track table */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-[24px_1fr_1fr_1.2fr_1.2fr_80px_32px] gap-2 px-2 text-xs text-zinc-500 uppercase tracking-widest">
+              <span>#</span><span>MP3</span><span>이미지</span><span>제목</span><span>아티스트</span><span>상태</span><span />
             </div>
 
-            {/* Title / Artist */}
-            <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-widest">곡 정보</h2>
-              <div>
-                <label className="text-xs text-zinc-400 mb-1 block">제목</label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="곡 제목"
-                  className="w-full bg-zinc-800 text-white text-sm rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-zinc-400 mb-1 block">아티스트</label>
-                <input
-                  type="text"
-                  value={artist}
-                  onChange={(e) => setArtist(e.target.value)}
-                  placeholder="아티스트명"
-                  className="w-full bg-zinc-800 text-white text-sm rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500"
-                />
-              </div>
-            </div>
-
-            {/* Duration */}
-            <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
-              <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-widest">영상 길이</h2>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={1}
-                  max={180}
-                  value={customDuration}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setCustomDuration(v === "" ? "" : Math.min(180, Math.max(1, Number(v))));
-                  }}
-                  className="w-24 bg-zinc-800 text-white text-xl font-bold rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500 text-center"
-                  placeholder="40"
-                />
-                <div className="text-sm text-zinc-400">
-                  초
-                  {audioDuration > 0 && (
-                    <button
-                      onClick={() => setCustomDuration(Math.ceil(audioDuration))}
-                      className="ml-3 text-xs text-zinc-500 hover:text-white underline"
-                    >
-                      MP3 길이 사용 ({formatTime(audioDuration)})
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Generate */}
-            <div className="bg-zinc-900 rounded-xl p-4 space-y-3">
-              <button
-                onClick={generateVideo}
-                disabled={generating || !ffmpegLoaded}
-                className="w-full py-3.5 rounded-xl font-bold text-base transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white text-black hover:bg-zinc-200 active:scale-95"
+            {tracks.map((t, i) => (
+              <div
+                key={i}
+                onClick={() => setPreviewIdx(i)}
+                className={`grid grid-cols-[24px_1fr_1fr_1.2fr_1.2fr_80px_32px] gap-2 items-center bg-zinc-900 rounded-xl px-3 py-2.5 cursor-pointer transition-colors ${previewIdx === i ? "ring-1 ring-zinc-500" : "hover:bg-zinc-800"}`}
               >
-                {!ffmpegLoaded ? "FFmpeg 로딩 중..." : generating ? "생성 중..." : "🎬 영상 생성 & 다운로드"}
-              </button>
+                <span className="text-xs text-zinc-500 font-mono">{i + 1}</span>
 
-              {status && (
-                <div className={`text-sm px-3 py-2.5 rounded-lg ${status.startsWith("✅") ? "bg-green-900/40 text-green-400" : status.startsWith("❌") ? "bg-red-900/40 text-red-400" : "bg-zinc-800 text-zinc-300"}`}>
-                  {status}
+                {/* MP3 */}
+                <label className="cursor-pointer min-w-0">
+                  <input type="file" accept="audio/mp3,audio/mpeg" className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]; if (!f) return;
+                      const name = f.name.replace(/\.mp3$/i, "");
+                      const parts = name.split(" - ");
+                      setTrack(i, {
+                        mp3: f,
+                        title: t.title || (parts.length >= 2 ? parts.slice(1).join(" - ").trim() : name),
+                        artist: t.artist || (parts.length >= 2 ? parts[0].trim() : ""),
+                        status: "idle",
+                      });
+                    }}
+                  />
+                  <div className={`text-xs truncate px-2 py-1.5 rounded-lg border ${t.mp3 ? "border-green-700 text-green-400" : "border-zinc-700 text-zinc-500 hover:border-zinc-500"}`}>
+                    {t.mp3 ? t.mp3.name.replace(/\.mp3$/i, "") : "클릭하여 선택"}
+                  </div>
+                </label>
+
+                {/* Image */}
+                <label className="cursor-pointer min-w-0">
+                  <input type="file" accept="image/*" className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]; if (!f) return;
+                      const url = URL.createObjectURL(f);
+                      setTrack(i, { image: f, imageURL: url, status: "idle" });
+                    }}
+                  />
+                  <div className={`text-xs truncate px-2 py-1.5 rounded-lg border ${t.image ? "border-green-700 text-green-400" : "border-zinc-700 text-zinc-500 hover:border-zinc-500"}`}>
+                    {t.image ? t.image.name : "클릭하여 선택"}
+                  </div>
+                </label>
+
+                {/* Title */}
+                <input
+                  value={t.title}
+                  onChange={(e) => setTrack(i, { title: e.target.value })}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="제목"
+                  className="text-xs bg-zinc-800 text-white rounded-lg px-2 py-1.5 border border-zinc-700 focus:outline-none focus:border-zinc-500 min-w-0"
+                />
+
+                {/* Artist */}
+                <input
+                  value={t.artist}
+                  onChange={(e) => setTrack(i, { artist: e.target.value })}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="아티스트"
+                  className="text-xs bg-zinc-800 text-white rounded-lg px-2 py-1.5 border border-zinc-700 focus:outline-none focus:border-zinc-500 min-w-0"
+                />
+
+                {/* Status */}
+                <div className={`text-xs text-center ${t.status === "done" ? "text-green-400" : t.status === "error" ? "text-red-400" : t.status === "processing" ? "text-yellow-400" : "text-zinc-500"}`}>
+                  {STATUS_ICON[t.status]} {t.status === "idle" && t.mp3 && t.image ? "준비" : t.status === "idle" ? "대기" : t.status}
                 </div>
-              )}
-            </div>
 
-            <p className="text-xs text-zinc-600 text-center pb-4">
-              모든 처리는 브라우저에서 수행됩니다. 파일이 서버로 전송되지 않습니다.
-            </p>
+                {/* Remove */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeRow(i); }}
+                  className="text-zinc-600 hover:text-red-400 text-lg leading-none transition-colors"
+                  disabled={tracks.length === 1}
+                >×</button>
+              </div>
+            ))}
+
+            {tracks.length < MAX_TRACKS && (
+              <button
+                onClick={addRow}
+                className="w-full py-2 rounded-xl border border-dashed border-zinc-700 text-zinc-500 hover:text-white hover:border-zinc-500 text-sm transition-colors"
+              >
+                + 행 추가 ({tracks.length}/{MAX_TRACKS})
+              </button>
+            )}
           </div>
         </div>
       </div>
