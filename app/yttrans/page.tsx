@@ -63,7 +63,6 @@ const ALL_LANGS = LANG_GROUPS.flatMap((g) => g.langs);
 type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string };
 type TranslateResult = Record<string, { title: string; description: string }>;
 type AuthStatus = { authenticated: boolean; email?: string };
-type PushState = { lang: string; status: "loading" | "ok" | "error"; message?: string };
 
 export default function YTTransPage() {
   const [url, setUrl] = useState("");
@@ -74,7 +73,7 @@ export default function YTTransPage() {
   const [transLoading, setTransLoading] = useState(false);
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
-  const [pushState, setPushState] = useState<PushState | null>(null);
+  const [pushState, setPushState] = useState<{ status: "loading" | "ok" | "error"; message?: string } | null>(null);
 
   const checkAuthStatus = useCallback(async () => {
     try {
@@ -171,9 +170,9 @@ export default function YTTransPage() {
     setAuthStatus({ authenticated: false });
   };
 
-  const pushToYouTube = async (lang: string) => {
-    if (!video || !results?.[lang]) return;
-    setPushState({ lang, status: "loading" });
+  const pushAllToYouTube = async () => {
+    if (!video || !results) return;
+    setPushState({ status: "loading" });
 
     try {
       const res = await fetch("/api/yttrans/push", {
@@ -181,8 +180,7 @@ export default function YTTransPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           video_id: video.videoId,
-          title: results[lang].title,
-          description: results[lang].description,
+          translations: results,
         }),
       });
       const data = await res.json();
@@ -190,17 +188,17 @@ export default function YTTransPage() {
       if (!res.ok) {
         if (res.status === 401) {
           setAuthStatus({ authenticated: false });
-          setPushState({ lang, status: "error", message: "인증 만료. 다시 로그인하세요." });
+          setPushState({ status: "error", message: "인증 만료. 다시 로그인하세요." });
         } else {
-          setPushState({ lang, status: "error", message: data.error || "업데이트 실패" });
+          setPushState({ status: "error", message: data.error || "업데이트 실패" });
         }
         return;
       }
 
-      setPushState({ lang, status: "ok" });
-      setTimeout(() => setPushState(null), 3000);
+      setPushState({ status: "ok" });
+      setTimeout(() => setPushState(null), 4000);
     } catch {
-      setPushState({ lang, status: "error", message: "네트워크 오류" });
+      setPushState({ status: "error", message: "네트워크 오류" });
     }
   };
 
@@ -298,14 +296,14 @@ export default function YTTransPage() {
           <div className="space-y-3">
             <div className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">번역 결과</div>
 
-            {/* YouTube 인증 배너 */}
+            {/* YouTube 일괄 적용 배너 */}
             {authStatus !== null && (
               <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
                 {!authStatus.authenticated ? (
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="text-sm text-zinc-300 font-medium">번역 결과를 YouTube에 직접 적용할 수 있습니다.</p>
-                      <p className="text-xs text-zinc-500 mt-0.5">Google 계정으로 인증하면 제목·설명을 바로 업데이트합니다.</p>
+                      <p className="text-sm text-zinc-300 font-medium">번역된 {selectedLangs.length}개 언어를 YouTube에 한 번에 적용할 수 있습니다.</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">Google 계정으로 인증하면 영상 다국어 제목·설명을 일괄 등록합니다.</p>
                     </div>
                     <button
                       onClick={handleLogin}
@@ -315,23 +313,42 @@ export default function YTTransPage() {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-green-400 text-sm">✓</span>
-                      <span className="text-sm text-zinc-300">
-                        {authStatus.email ? (
-                          <span>인증됨 <span className="text-zinc-500 text-xs">({authStatus.email})</span></span>
-                        ) : (
-                          "인증됨"
-                        )}
-                      </span>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-400 text-sm">✓</span>
+                        <span className="text-sm text-zinc-300">
+                          {authStatus.email ? (
+                            <span>인증됨 <span className="text-zinc-500 text-xs">({authStatus.email})</span></span>
+                          ) : "인증됨"}
+                        </span>
+                      </div>
+                      <button
+                        onClick={handleLogout}
+                        className="text-xs text-zinc-500 hover:text-white px-3 py-1.5 rounded-lg hover:bg-zinc-700 transition-colors"
+                      >
+                        로그아웃
+                      </button>
                     </div>
                     <button
-                      onClick={handleLogout}
-                      className="text-xs text-zinc-500 hover:text-white px-3 py-1.5 rounded-lg hover:bg-zinc-700 transition-colors"
+                      onClick={pushAllToYouTube}
+                      disabled={pushState?.status === "loading"}
+                      className="w-full py-2.5 rounded-lg bg-red-600 text-white font-bold text-sm hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                     >
-                      로그아웃
+                      {pushState?.status === "loading"
+                        ? `YouTube에 적용 중... (${selectedLangs.length}개 언어)`
+                        : `▶ ${selectedLangs.length}개 언어 YouTube에 일괄 적용`}
                     </button>
+                    {pushState?.status === "ok" && (
+                      <div className="text-xs text-green-400 bg-green-900/20 px-3 py-2 rounded-lg text-center">
+                        ✓ {selectedLangs.length}개 언어 YouTube 업데이트 완료
+                      </div>
+                    )}
+                    {pushState?.status === "error" && (
+                      <div className="text-xs text-red-400 bg-red-900/20 px-3 py-2 rounded-lg text-center">
+                        {pushState.message || "업데이트 실패"}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -341,42 +358,18 @@ export default function YTTransPage() {
               const r = results[lang];
               if (!r) return null;
               const langLabel = ALL_LANGS.find((l) => l.code === lang)?.label || lang;
-              const isPushing = pushState?.lang === lang && pushState.status === "loading";
-              const pushOk = pushState?.lang === lang && pushState.status === "ok";
-              const pushErr = pushState?.lang === lang && pushState.status === "error";
 
               return (
                 <div key={lang} className="bg-zinc-900 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-zinc-300">{langLabel}</span>
-                    <div className="flex items-center gap-2">
-                      {authStatus?.authenticated && (
-                        <button
-                          onClick={() => pushToYouTube(lang)}
-                          disabled={isPushing}
-                          className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                        >
-                          {isPushing ? "적용 중..." : "YouTube에 적용"}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => copyAll(lang)}
-                        className="text-xs text-zinc-500 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700"
-                      >
-                        복사
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => copyAll(lang)}
+                      className="text-xs text-zinc-500 hover:text-white transition-colors px-2 py-1 rounded hover:bg-zinc-700"
+                    >
+                      복사
+                    </button>
                   </div>
-                  {pushOk && (
-                    <div className="text-xs text-green-400 bg-green-900/20 px-3 py-1.5 rounded-lg">
-                      ✓ YouTube 업데이트 완료
-                    </div>
-                  )}
-                  {pushErr && (
-                    <div className="text-xs text-red-400 bg-red-900/20 px-3 py-1.5 rounded-lg">
-                      {pushState.message || "업데이트 실패"}
-                    </div>
-                  )}
                   <div className="text-sm font-medium text-white">{r.title}</div>
                   <div className="text-xs text-zinc-400 whitespace-pre-line max-h-32 overflow-y-auto">{r.description}</div>
                 </div>

@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// YouTube BCP-47 언어코드 매핑 (우리 코드 → YouTube 코드)
+const LANG_MAP: Record<string, string> = {
+  "zh-CN": "zh-Hans",
+  "yue": "zh-Hant",
+};
+function toYTLang(code: string): string {
+  return LANG_MAP[code] || code;
+}
+
 async function refreshAccessToken(refreshToken: string): Promise<string | null> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -23,15 +32,16 @@ async function refreshAccessToken(refreshToken: string): Promise<string | null> 
   }
 }
 
-async function updateYouTubeVideo(
+type Translations = Record<string, { title: string; description: string }>;
+
+async function pushLocalizations(
   accessToken: string,
   videoId: string,
-  title: string,
-  description: string
+  translations: Translations
 ): Promise<{ ok: boolean; status?: number }> {
-  // 1. 기존 snippet 가져오기
+  // 1. 기존 snippet + localizations 가져오기
   const listRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}`,
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -39,12 +49,21 @@ async function updateYouTubeVideo(
   if (!listRes.ok) return { ok: false, status: listRes.status };
 
   const listData = await listRes.json();
-  const snippet = listData.items?.[0]?.snippet;
-  if (!snippet) return { ok: false, status: 404 };
+  const item = listData.items?.[0];
+  if (!item) return { ok: false, status: 404 };
 
-  // 2. title/description 교체 후 업데이트
+  const existingLocalizations = item.localizations || {};
+
+  // 2. 번역 결과를 localizations에 병합
+  const newLocalizations = { ...existingLocalizations };
+  for (const [lang, { title, description }] of Object.entries(translations)) {
+    const ytLang = toYTLang(lang);
+    newLocalizations[ytLang] = { title, description };
+  }
+
+  // 3. localizations 업데이트
   const updateRes = await fetch(
-    "https://www.googleapis.com/youtube/v3/videos?part=snippet",
+    "https://www.googleapis.com/youtube/v3/videos?part=localizations",
     {
       method: "PUT",
       headers: {
@@ -53,13 +72,17 @@ async function updateYouTubeVideo(
       },
       body: JSON.stringify({
         id: videoId,
-        snippet: { ...snippet, title, description },
+        localizations: newLocalizations,
       }),
     }
   );
 
   if (updateRes.status === 401) return { ok: false, status: 401 };
-  if (!updateRes.ok) return { ok: false, status: updateRes.status };
+  if (!updateRes.ok) {
+    const errBody = await updateRes.json().catch(() => ({}));
+    console.error("YouTube update error:", errBody);
+    return { ok: false, status: updateRes.status };
+  }
 
   return { ok: true };
 }
@@ -72,19 +95,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "인증 필요" }, { status: 401 });
   }
 
-  let body: { video_id?: string; title?: string; description?: string };
+  let body: { video_id?: string; translations?: Translations };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "잘못된 요청" }, { status: 400 });
   }
 
-  const { video_id, title, description } = body;
-  if (!video_id || !title || description === undefined) {
-    return NextResponse.json({ error: "video_id, title, description 필수" }, { status: 400 });
+  const { video_id, translations } = body;
+  if (!video_id || !translations || !Object.keys(translations).length) {
+    return NextResponse.json({ error: "video_id, translations 필수" }, { status: 400 });
   }
 
-  let result = await updateYouTubeVideo(accessToken, video_id, title, description);
+  let result = await pushLocalizations(accessToken, video_id, translations);
 
   // 401이면 토큰 갱신 후 재시도
   if (result.status === 401 && refreshToken) {
@@ -93,7 +116,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
     }
     accessToken = newToken;
-    result = await updateYouTubeVideo(accessToken, video_id, title, description);
+    result = await pushLocalizations(accessToken, video_id, translations);
 
     if (result.ok) {
       const response = NextResponse.json({ ok: true });
