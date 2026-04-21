@@ -2,23 +2,63 @@
 
 import { useState } from "react";
 
-const LANG_OPTIONS = [
-  { code: "ko", label: "한국어" },
-  { code: "ja", label: "日本語" },
-  { code: "zh-CN", label: "中文(简体)" },
-  { code: "zh-TW", label: "中文(繁體)" },
-  { code: "es", label: "Español" },
-  { code: "fr", label: "Français" },
-  { code: "de", label: "Deutsch" },
-  { code: "pt", label: "Português" },
-  { code: "ru", label: "Русский" },
-  { code: "ar", label: "العربية" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "th", label: "ภาษาไทย" },
-  { code: "vi", label: "Tiếng Việt" },
-  { code: "id", label: "Bahasa Indonesia" },
-  { code: "tr", label: "Türkçe" },
+const LANG_GROUPS = [
+  {
+    region: "아시아",
+    langs: [
+      { code: "ko", label: "한국어" },
+      { code: "ja", label: "日本語" },
+      { code: "zh-CN", label: "中文(简体)" },
+      { code: "yue", label: "廣東話" },
+      { code: "vi", label: "Tiếng Việt" },
+      { code: "ms", label: "Bahasa Melayu" },
+      { code: "id", label: "Bahasa Indonesia" },
+      { code: "th", label: "ภาษาไทย" },
+      { code: "tl", label: "Filipino" },
+      { code: "hi", label: "हिन्दी" },
+      { code: "bn", label: "বাংলা" },
+      { code: "fa", label: "فارسی" },
+      { code: "ar", label: "العربية" },
+    ],
+  },
+  {
+    region: "유럽",
+    langs: [
+      { code: "en", label: "English" },
+      { code: "fr", label: "Français" },
+      { code: "de", label: "Deutsch" },
+      { code: "it", label: "Italiano" },
+      { code: "es", label: "Español" },
+      { code: "pt", label: "Português" },
+      { code: "ru", label: "Русский" },
+      { code: "nl", label: "Nederlands" },
+      { code: "pl", label: "Polski" },
+      { code: "sv", label: "Svenska" },
+      { code: "no", label: "Norsk" },
+      { code: "da", label: "Dansk" },
+      { code: "fi", label: "Suomi" },
+      { code: "ro", label: "Română" },
+      { code: "cs", label: "Čeština" },
+      { code: "el", label: "Ελληνικά" },
+      { code: "hu", label: "Magyar" },
+      { code: "uk", label: "Українська" },
+      { code: "sk", label: "Slovenčina" },
+      { code: "hr", label: "Hrvatski" },
+      { code: "ca", label: "Català" },
+      { code: "is", label: "Íslenska" },
+    ],
+  },
+  {
+    region: "기타",
+    langs: [
+      { code: "tr", label: "Türkçe" },
+      { code: "he", label: "עברית" },
+      { code: "af", label: "Afrikaans" },
+    ],
+  },
 ];
+
+const ALL_LANGS = LANG_GROUPS.flatMap((g) => g.langs);
 
 type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string };
 type TranslateResult = Record<string, { title: string; description: string }>;
@@ -81,6 +121,9 @@ export default function YTTransPage() {
     );
   };
 
+  const selectAll = () => setSelectedLangs(ALL_LANGS.map((l) => l.code));
+  const clearAll = () => setSelectedLangs([]);
+
   const copyAll = (lang: string) => {
     if (!results?.[lang]) return;
     const { title, description } = results[lang];
@@ -139,22 +182,33 @@ export default function YTTransPage() {
         {/* 언어 선택 */}
         {video && (
           <div className="bg-zinc-900 rounded-xl p-4 mb-4 space-y-3">
-            <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">번역 언어 선택</label>
-            <div className="flex flex-wrap gap-2">
-              {LANG_OPTIONS.map((lang) => (
-                <button
-                  key={lang.code}
-                  onClick={() => toggleLang(lang.code)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    selectedLangs.includes(lang.code)
-                      ? "bg-white text-black"
-                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-                  }`}
-                >
-                  {lang.label}
-                </button>
-              ))}
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">번역 언어 선택</label>
+              <div className="flex gap-2">
+                <button onClick={selectAll} className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-700 transition-colors">전체</button>
+                <button onClick={clearAll} className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-700 transition-colors">해제</button>
+              </div>
             </div>
+            {LANG_GROUPS.map((group) => (
+              <div key={group.region}>
+                <div className="text-xs text-zinc-600 mb-1.5">{group.region}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.langs.map((lang) => (
+                    <button
+                      key={lang.code}
+                      onClick={() => toggleLang(lang.code)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        selectedLangs.includes(lang.code)
+                          ? "bg-white text-black"
+                          : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      }`}
+                    >
+                      {lang.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
             <button
               onClick={translate}
               disabled={transLoading || !selectedLangs.length}
@@ -172,7 +226,7 @@ export default function YTTransPage() {
             {selectedLangs.map((lang) => {
               const r = results[lang];
               if (!r) return null;
-              const langLabel = LANG_OPTIONS.find((l) => l.code === lang)?.label || lang;
+              const langLabel = ALL_LANGS.find((l) => l.code === lang)?.label || lang;
               return (
                 <div key={lang} className="bg-zinc-900 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">

@@ -5,9 +5,16 @@ const GEMINI_URL =
 
 const LANG_NAMES: Record<string, string> = {
   ko: "Korean", ja: "Japanese", "zh-CN": "Simplified Chinese",
-  "zh-TW": "Traditional Chinese", es: "Spanish", fr: "French",
-  de: "German", pt: "Portuguese", ru: "Russian", ar: "Arabic",
-  hi: "Hindi", th: "Thai", vi: "Vietnamese", id: "Indonesian", tr: "Turkish",
+  yue: "Cantonese", vi: "Vietnamese", ms: "Malay", id: "Indonesian",
+  th: "Thai", tl: "Filipino", hi: "Hindi", bn: "Bengali",
+  fa: "Persian", ar: "Arabic",
+  en: "English", fr: "French", de: "German", it: "Italian",
+  es: "Spanish", pt: "Portuguese", ru: "Russian", nl: "Dutch",
+  pl: "Polish", sv: "Swedish", no: "Norwegian", da: "Danish",
+  fi: "Finnish", ro: "Romanian", cs: "Czech", el: "Greek",
+  hu: "Hungarian", uk: "Ukrainian", sk: "Slovak", hr: "Croatian",
+  ca: "Catalan", is: "Icelandic",
+  tr: "Turkish", he: "Hebrew", af: "Afrikaans",
 };
 
 export async function POST(req: NextRequest) {
