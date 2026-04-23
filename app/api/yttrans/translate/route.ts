@@ -29,7 +29,14 @@ async function translateGemini(text: string, target: string, langLabel: string):
   if (!apiKey) throw new Error("GEMINI_API_KEY 없음");
   if (!text.trim()) return "";
 
-  const prompt = `Translate the following text to ${langLabel}. Output only the translated text, nothing else.\n\n${text}`;
+  const prompt = `Translate the following text to ${langLabel}. Rules:
+- Stay as faithful to the original as possible (word choice, tone, nuance, structure)
+- Do NOT paraphrase, summarize, or add/remove content
+- Preserve line breaks, punctuation style, and formatting
+- Output only the translated text, nothing else
+
+Text to translate:
+${text}`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
