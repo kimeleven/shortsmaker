@@ -59,11 +59,14 @@ async function pushLocalizations(
   // 2. defaultLanguage 결정: 기존값 > 파라미터 > 'ko' 폴백
   const resolvedDefaultLang = snippet.defaultLanguage || defaultLanguage || "ko";
 
-  // 3. 번역 결과를 localizations에 병합
+  // 3. 번역 결과를 localizations에 병합 (YouTube 제한: 제목 100자, 설명 5000자)
   const newLocalizations = { ...existingLocalizations };
   for (const [lang, { title, description }] of Object.entries(translations)) {
     const ytLang = toYTLang(lang);
-    newLocalizations[ytLang] = { title, description };
+    newLocalizations[ytLang] = {
+      title: title.slice(0, 100),
+      description: description.slice(0, 5000),
+    };
   }
 
   // 4. defaultLanguage 미설정 시 snippet만 먼저 업데이트 (읽기전용 필드 제외)
