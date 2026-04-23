@@ -65,9 +65,10 @@ async function pushLocalizations(
   const newLocalizations = { ...existingLocalizations };
   for (const [lang, { title, description }] of Object.entries(translations)) {
     const ytLang = toYTLang(lang);
+    if (!title && !description) continue;
     newLocalizations[ytLang] = {
-      title: title.slice(0, 100),
-      description: description.slice(0, 5000),
+      title: (title || "").slice(0, 100),
+      description: (description || "").slice(0, 5000),
     };
   }
 
