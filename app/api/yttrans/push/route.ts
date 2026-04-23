@@ -72,44 +72,33 @@ async function pushLocalizations(
     };
   }
 
-  // 4. defaultLanguage 미설정 시 snippet만 먼저 업데이트 (읽기전용 필드 제외)
-  if (!snippet.defaultLanguage) {
-    const { localized, thumbnails, channelId, publishedAt, ...writableSnippet } = snippet;
-    void localized; void thumbnails; void channelId; void publishedAt;
+  // 4. snippet(writable 필드만) + localizations 동시 업데이트
+  const writableSnippet = {
+    title: snippet.title,
+    description: snippet.description ?? "",
+    categoryId: snippet.categoryId,
+    defaultLanguage: resolvedDefaultLang,
+    ...(snippet.tags && { tags: snippet.tags }),
+    ...(snippet.defaultAudioLanguage && { defaultAudioLanguage: snippet.defaultAudioLanguage }),
+  };
 
-    const snippetRes = await fetch(
-      "https://www.googleapis.com/youtube/v3/videos?part=snippet",
-      {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: videoId,
-          snippet: { ...writableSnippet, defaultLanguage: resolvedDefaultLang },
-        }),
-      }
-    );
-    if (snippetRes.status === 401) return { ok: false, status: 401 };
-    if (!snippetRes.ok) {
-      const e = await snippetRes.json().catch(() => ({}));
-      console.error("snippet update error:", e);
-      return { ok: false, status: snippetRes.status, detail: JSON.stringify(e) };
-    }
-  }
-
-  // 5. localizations 업데이트
   const updateRes = await fetch(
-    "https://www.googleapis.com/youtube/v3/videos?part=localizations",
+    "https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations",
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ id: videoId, localizations: newLocalizations }),
+      body: JSON.stringify({
+        id: videoId,
+        snippet: writableSnippet,
+        localizations: newLocalizations,
+      }),
     }
   );
 
   if (updateRes.status === 401) return { ok: false, status: 401 };
   if (!updateRes.ok) {
     const errBody = await updateRes.json().catch(() => ({}));
-    console.error("localizations update error:", JSON.stringify(errBody));
+    console.error("update error:", JSON.stringify(errBody));
     return { ok: false, status: updateRes.status, detail: JSON.stringify(errBody) };
   }
 
