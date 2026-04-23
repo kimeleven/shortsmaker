@@ -57,8 +57,7 @@ async function pushLocalizations(
   const existingLocalizations = item.localizations || {};
 
   // 2. defaultLanguage 결정: 기존값 > 파라미터 > 'ko' 폴백
-  const resolvedDefaultLang =
-    snippet.defaultLanguage || defaultLanguage || "ko";
+  const resolvedDefaultLang = snippet.defaultLanguage || defaultLanguage || "ko";
 
   // 3. 번역 결과를 localizations에 병합
   const newLocalizations = { ...existingLocalizations };
@@ -67,27 +66,44 @@ async function pushLocalizations(
     newLocalizations[ytLang] = { title, description };
   }
 
-  // 4. snippet(defaultLanguage) + localizations 동시 업데이트
+  // 4. defaultLanguage 미설정 시 snippet만 먼저 업데이트 (읽기전용 필드 제외)
+  if (!snippet.defaultLanguage) {
+    const { localized, thumbnails, channelId, publishedAt, ...writableSnippet } = snippet;
+    void localized; void thumbnails; void channelId; void publishedAt;
+
+    const snippetRes = await fetch(
+      "https://www.googleapis.com/youtube/v3/videos?part=snippet",
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: videoId,
+          snippet: { ...writableSnippet, defaultLanguage: resolvedDefaultLang },
+        }),
+      }
+    );
+    if (snippetRes.status === 401) return { ok: false, status: 401 };
+    if (!snippetRes.ok) {
+      const e = await snippetRes.json().catch(() => ({}));
+      console.error("snippet update error:", e);
+      return { ok: false, status: snippetRes.status };
+    }
+  }
+
+  // 5. localizations 업데이트
   const updateRes = await fetch(
-    "https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations",
+    "https://www.googleapis.com/youtube/v3/videos?part=localizations",
     {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        id: videoId,
-        snippet: { ...snippet, defaultLanguage: resolvedDefaultLang },
-        localizations: newLocalizations,
-      }),
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: videoId, localizations: newLocalizations }),
     }
   );
 
   if (updateRes.status === 401) return { ok: false, status: 401 };
   if (!updateRes.ok) {
     const errBody = await updateRes.json().catch(() => ({}));
-    console.error("YouTube update error:", errBody);
+    console.error("localizations update error:", errBody);
     return { ok: false, status: updateRes.status };
   }
 
