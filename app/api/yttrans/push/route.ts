@@ -39,7 +39,7 @@ async function pushLocalizations(
   videoId: string,
   translations: Translations,
   defaultLanguage: string | null
-): Promise<{ ok: boolean; status?: number }> {
+): Promise<{ ok: boolean; status?: number; detail?: string }> {
   // 1. 기존 snippet + localizations 가져오기
   const listRes = await fetch(
     `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}`,
@@ -86,7 +86,7 @@ async function pushLocalizations(
     if (!snippetRes.ok) {
       const e = await snippetRes.json().catch(() => ({}));
       console.error("snippet update error:", e);
-      return { ok: false, status: snippetRes.status };
+      return { ok: false, status: snippetRes.status, detail: JSON.stringify(e) };
     }
   }
 
@@ -103,8 +103,8 @@ async function pushLocalizations(
   if (updateRes.status === 401) return { ok: false, status: 401 };
   if (!updateRes.ok) {
     const errBody = await updateRes.json().catch(() => ({}));
-    console.error("localizations update error:", errBody);
-    return { ok: false, status: updateRes.status };
+    console.error("localizations update error:", JSON.stringify(errBody));
+    return { ok: false, status: updateRes.status, detail: JSON.stringify(errBody) };
   }
 
   return { ok: true };
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
     if (result.status === 404) {
       return NextResponse.json({ error: "영상을 찾을 수 없음" }, { status: 404 });
     }
-    return NextResponse.json({ error: `YouTube API 오류 (${result.status})` }, { status: 500 });
+    return NextResponse.json({ error: `YouTube API 오류 (${result.status}): ${result.detail || ""}` }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });
