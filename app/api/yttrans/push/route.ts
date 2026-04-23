@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const maxDuration = 60;
+
 // YouTube BCP-47 언어코드 매핑 (우리 코드 → YouTube 코드)
 const LANG_MAP: Record<string, string> = {
   "zh-CN": "zh-Hans",

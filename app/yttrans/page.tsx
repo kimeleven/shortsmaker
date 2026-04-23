@@ -184,22 +184,28 @@ export default function YTTransPage() {
           default_language: video.defaultLanguage ?? null,
         }),
       });
-      const data = await res.json();
+      let data: { error?: string } = {};
+      try {
+        data = await res.json();
+      } catch {
+        setPushState({ status: "error", message: `응답 파싱 실패 (HTTP ${res.status})` });
+        return;
+      }
 
       if (!res.ok) {
         if (res.status === 401) {
           setAuthStatus({ authenticated: false });
           setPushState({ status: "error", message: "인증 만료. 다시 로그인하세요." });
         } else {
-          setPushState({ status: "error", message: data.error || "업데이트 실패" });
+          setPushState({ status: "error", message: data.error || `오류 (${res.status})` });
         }
         return;
       }
 
       setPushState({ status: "ok" });
       setTimeout(() => setPushState(null), 4000);
-    } catch {
-      setPushState({ status: "error", message: "네트워크 오류" });
+    } catch (e) {
+      setPushState({ status: "error", message: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}` });
     }
   };
 
