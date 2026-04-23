@@ -42,13 +42,10 @@ async function pushLocalizations(
   translations: Translations,
   defaultLanguage: string | null,
   channelId?: string | null
-): Promise<{ ok: boolean; status?: number; detail?: string }> {
-  // 채널 파라미터 (브랜드 채널용)
-  const channelParam = channelId ? `&onBehalfOfContentOwnerChannel=${encodeURIComponent(channelId)}` : "";
-
+): Promise<{ ok: boolean; status?: number; detail?: string; channelId?: string; appliedLangs?: string[] }> {
   // 1. 기존 snippet + localizations 가져오기
   const listRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}${channelParam}`,
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -87,7 +84,7 @@ async function pushLocalizations(
   };
 
   const updateRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations${channelParam}`,
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations`,
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -106,7 +103,9 @@ async function pushLocalizations(
     return { ok: false, status: updateRes.status, detail: JSON.stringify(errBody) };
   }
 
-  return { ok: true };
+  const updatedData = await updateRes.json().catch(() => ({}));
+  const appliedLangs = Object.keys(updatedData.localizations || {});
+  return { ok: true, channelId: updatedData.snippet?.channelId, appliedLangs };
 }
 
 export async function POST(req: NextRequest) {
@@ -164,7 +163,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `YouTube API 오류 (${result.status}): ${result.detail || ""}` }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, channelId: result.channelId, appliedLangs: result.appliedLangs });
   } catch (e) {
     console.error("push handler error:", e);
     return NextResponse.json({ error: `서버 오류: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });

@@ -203,7 +203,7 @@ export default function YTTransPage() {
           channel_id: selectedChannelId || null,
         }),
       });
-      let data: { error?: string } = {};
+      let data: { error?: string; channelId?: string; appliedLangs?: string[] } = {};
       try {
         data = await res.json();
       } catch {
@@ -221,8 +221,11 @@ export default function YTTransPage() {
         return;
       }
 
-      setPushState({ status: "ok" });
-      setTimeout(() => setPushState(null), 4000);
+      const msg = data.appliedLangs?.length
+        ? `채널 ${data.channelId || "?"} — ${data.appliedLangs.length}개 언어 적용됨`
+        : "완료";
+      setPushState({ status: "ok", message: msg });
+      setTimeout(() => setPushState(null), 6000);
     } catch (e) {
       setPushState({ status: "error", message: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}` });
     }
@@ -381,7 +384,7 @@ export default function YTTransPage() {
                     </button>
                     {pushState?.status === "ok" && (
                       <div className="text-xs text-green-400 bg-green-900/20 px-3 py-2 rounded-lg text-center">
-                        ✓ {selectedLangs.length}개 언어 YouTube 업데이트 완료
+                        ✓ {pushState.message || `${selectedLangs.length}개 언어 YouTube 업데이트 완료`}
                       </div>
                     )}
                     {pushState?.status === "error" && (
