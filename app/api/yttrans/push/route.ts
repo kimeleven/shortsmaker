@@ -135,39 +135,44 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "video_id, translations 필수" }, { status: 400 });
   }
 
-  let result = await pushLocalizations(accessToken, video_id, translations, default_language);
+  try {
+    let result = await pushLocalizations(accessToken, video_id, translations, default_language);
 
-  // 401이면 토큰 갱신 후 재시도
-  if (result.status === 401 && refreshToken) {
-    const newToken = await refreshAccessToken(refreshToken);
-    if (!newToken) {
-      return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
-    }
-    accessToken = newToken;
-    result = await pushLocalizations(accessToken, video_id, translations, default_language);
+    // 401이면 토큰 갱신 후 재시도
+    if (result.status === 401 && refreshToken) {
+      const newToken = await refreshAccessToken(refreshToken);
+      if (!newToken) {
+        return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
+      }
+      accessToken = newToken;
+      result = await pushLocalizations(accessToken, video_id, translations, default_language);
 
-    if (result.ok) {
-      const response = NextResponse.json({ ok: true });
-      response.cookies.set("yt_access_token", newToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 30,
-        sameSite: "lax",
-      });
-      return response;
+      if (result.ok) {
+        const response = NextResponse.json({ ok: true });
+        response.cookies.set("yt_access_token", newToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 30,
+          sameSite: "lax",
+        });
+        return response;
+      }
     }
+
+    if (!result.ok) {
+      if (result.status === 401) {
+        return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
+      }
+      if (result.status === 404) {
+        return NextResponse.json({ error: "영상을 찾을 수 없음" }, { status: 404 });
+      }
+      return NextResponse.json({ error: `YouTube API 오류 (${result.status}): ${result.detail || ""}` }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    console.error("push handler error:", e);
+    return NextResponse.json({ error: `서버 오류: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
   }
-
-  if (!result.ok) {
-    if (result.status === 401) {
-      return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
-    }
-    if (result.status === 404) {
-      return NextResponse.json({ error: "영상을 찾을 수 없음" }, { status: 404 });
-    }
-    return NextResponse.json({ error: `YouTube API 오류 (${result.status}): ${result.detail || ""}` }, { status: 500 });
-  }
-
-  return NextResponse.json({ ok: true });
 }
