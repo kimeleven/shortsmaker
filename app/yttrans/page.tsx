@@ -63,6 +63,7 @@ const ALL_LANGS = LANG_GROUPS.flatMap((g) => g.langs);
 type VideoInfo = { videoId: string; title: string; description: string; thumbnail?: string; defaultLanguage?: string | null };
 type TranslateResult = Record<string, { title: string; description: string }>;
 type AuthStatus = { authenticated: boolean; email?: string };
+type Channel = { id: string; title: string; thumbnail?: string };
 
 export default function YTTransPage() {
   const [url, setUrl] = useState("");
@@ -73,17 +74,34 @@ export default function YTTransPage() {
   const [transLoading, setTransLoading] = useState(false);
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("");
   const [pushState, setPushState] = useState<{ status: "loading" | "ok" | "error"; message?: string } | null>(null);
+
+  const fetchChannels = useCallback(async () => {
+    try {
+      const res = await fetch("/api/yttrans/oauth/channels");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.channels?.length) {
+        setChannels(data.channels);
+        setSelectedChannelId(data.channels[0].id);
+      }
+    } catch {
+      // 채널 조회 실패 무시
+    }
+  }, []);
 
   const checkAuthStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/yttrans/oauth/status");
       const data = await res.json();
       setAuthStatus(data);
+      if (data.authenticated) fetchChannels();
     } catch {
       setAuthStatus({ authenticated: false });
     }
-  }, []);
+  }, [fetchChannels]);
 
   useEffect(() => {
     checkAuthStatus();
@@ -182,6 +200,7 @@ export default function YTTransPage() {
           video_id: video.videoId,
           translations: results,
           default_language: video.defaultLanguage ?? null,
+          channel_id: selectedChannelId || null,
         }),
       });
       let data: { error?: string } = {};
@@ -337,6 +356,20 @@ export default function YTTransPage() {
                         로그아웃
                       </button>
                     </div>
+                    {channels.length > 1 && (
+                      <div className="space-y-1">
+                        <label className="text-xs text-zinc-500">업데이트할 채널 선택</label>
+                        <select
+                          value={selectedChannelId}
+                          onChange={(e) => setSelectedChannelId(e.target.value)}
+                          className="w-full bg-zinc-800 text-white text-sm rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-zinc-500"
+                        >
+                          {channels.map((ch) => (
+                            <option key={ch.id} value={ch.id}>{ch.title}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <button
                       onClick={pushAllToYouTube}
                       disabled={pushState?.status === "loading"}

@@ -40,11 +40,15 @@ async function pushLocalizations(
   accessToken: string,
   videoId: string,
   translations: Translations,
-  defaultLanguage: string | null
+  defaultLanguage: string | null,
+  channelId?: string | null
 ): Promise<{ ok: boolean; status?: number; detail?: string }> {
+  // 채널 파라미터 (브랜드 채널용)
+  const channelParam = channelId ? `&onBehalfOfContentOwnerChannel=${encodeURIComponent(channelId)}` : "";
+
   // 1. 기존 snippet + localizations 가져오기
   const listRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}`,
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations&id=${videoId}${channelParam}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -83,7 +87,7 @@ async function pushLocalizations(
   };
 
   const updateRes = await fetch(
-    "https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations",
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,localizations${channelParam}`,
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -113,20 +117,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "인증 필요" }, { status: 401 });
   }
 
-  let body: { video_id?: string; translations?: Translations; default_language?: string | null };
+  let body: { video_id?: string; translations?: Translations; default_language?: string | null; channel_id?: string | null };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "잘못된 요청" }, { status: 400 });
   }
 
-  const { video_id, translations, default_language = null } = body;
+  const { video_id, translations, default_language = null, channel_id = null } = body;
   if (!video_id || !translations || !Object.keys(translations).length) {
     return NextResponse.json({ error: "video_id, translations 필수" }, { status: 400 });
   }
 
   try {
-    let result = await pushLocalizations(accessToken, video_id, translations, default_language);
+    let result = await pushLocalizations(accessToken, video_id, translations, default_language, channel_id);
 
     // 401이면 토큰 갱신 후 재시도
     if (result.status === 401 && refreshToken) {
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "인증 만료. 다시 로그인하세요." }, { status: 401 });
       }
       accessToken = newToken;
-      result = await pushLocalizations(accessToken, video_id, translations, default_language);
+      result = await pushLocalizations(accessToken, video_id, translations, default_language, channel_id);
 
       if (result.ok) {
         const response = NextResponse.json({ ok: true });
