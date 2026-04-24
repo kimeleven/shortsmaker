@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const MENU = [
   { href: "/", icon: "🎬", label: "ShortsGen", desc: "쇼츠 영상 생성" },
   { href: "/yttrans", icon: "🌐", label: "YTTrans", desc: "YouTube 번역" },
+  { href: "/blog", icon: "📝", label: "블로그작성", desc: "음악 블로그 생성" },
 ];
 
 export default function Sidebar() {
